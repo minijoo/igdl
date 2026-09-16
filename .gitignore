@@ -1,0 +1,55 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Backend runtime/local artifacts
+backend/uvicorn.log
+backend/.env
+backend/jobs/
+
+# Retriever output — the user's actual Instagram activity data, not source.
+# Regenerated locally by main.py / build_headers.py.
+headers.json
+liked_snapshot.json
+liked_state.json
+saved_snapshot.json
+saved_state.json
+sync_log.txt
+
+# Raw instaloader CLI dump directories from manual testing — copyrighted
+# video/image content, not source. instaloader names these after the
+# shortcode (optionally hyphen-prefixed) or the --login target (:liked,
+# :saved), and always writes a .json.xz metadata sidecar alongside media.
+-D*/
+:liked/
+:saved/
+*.json.xz
+
+# Misc scratch/debug output accumulated during development
+test_output/
+tmp/
+pbcopy
+
+# iOS: XcodeGen generates IGDL.xcodeproj from project.yml — regenerate with
+# `xcodegen generate` after cloning, don't commit the generated project.
+ios/IGDL/IGDL.xcodeproj/
+ios/IGDL/**/xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# iOS: UI test debugging screenshots/recordings, and locally-seeded video
+# fixtures (real downloaded Instagram content) used by the DEBUG-only
+# "Seed local fixture videos" flow in SyncView — see docs/plan.md.
+ios/screenshots/
+ios/test_fixtures/
+
+# iOS: real API key — see Secrets.example.swift for the template this repo
+# ships instead.
+ios/IGDL/IGDL/Networking/Secrets.swift
+
+# Claude Code local session state
+.claude/

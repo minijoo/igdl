@@ -1,0 +1,56 @@
+name: IGDL
+options:
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+targets:
+  IGDL:
+    type: application
+    platform: iOS
+    sources:
+      - path: IGDL
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jordy.igdl
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: IGDL
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+  IGDLTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: IGDLTests
+    dependencies:
+      - target: IGDL
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+  IGDLUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: IGDLUITests
+    dependencies:
+      - target: IGDL
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+schemes:
+  IGDL:
+    build:
+      targets:
+        IGDL: all
+        IGDLTests: [test]
+        IGDLUITests: [test]
+    test:
+      targets:
+        - IGDLTests
+        - IGDLUITests
+    run:
+      config: Debug

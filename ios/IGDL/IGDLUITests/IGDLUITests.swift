@@ -435,6 +435,173 @@ final class IGDLUITests: XCTestCase {
         attachScreenshot(from: app, named: "caption-and-scrubber-no-pause")
     }
 
+    /// Verifies the Select… menu's "20 from top"/"20 random" options are
+    /// additive (repeated taps add more, never re-select or double-count
+    /// what's already selected) and that the running-total bar reflects it.
+    /// Fixture has only 3 pending videos, so "20 from top" naturally selects
+    /// "all 3, then nothing more" — exercises the same unselected-only
+    /// filtering logic a real 20+-video library would, without needing a
+    /// large fixture.
+    func testSelectMenuAddsWithoutDuplicating() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Done"].tap()
+
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download New Videos'")).firstMatch.tap()
+
+        XCTAssertTrue(app.staticTexts["0 selected"].waitForExistence(timeout: 5))
+
+        app.buttons["selectMenu"].tap()
+        app.buttons["select20FromTop"].tap()
+        XCTAssertTrue(app.staticTexts["3 selected"].waitForExistence(timeout: 5), "should select all 3 available (fewer than 20 exist)")
+        XCTAssertTrue(app.buttons["Download Selected (3)"].waitForExistence(timeout: 5))
+
+        // Tapping again should add nothing — all 3 are already selected,
+        // so there's nothing left unselected to add.
+        app.buttons["selectMenu"].tap()
+        app.buttons["select20FromTop"].tap()
+        XCTAssertTrue(app.staticTexts["3 selected"].waitForExistence(timeout: 5), "re-tapping with nothing left unselected should not change the count")
+
+        // Deselect one, then "20 random" should pick it back up (only
+        // candidate left) without duplicating the other two.
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'checkbox_'")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+
+        app.buttons["selectMenu"].tap()
+        app.buttons["select20Random"].tap()
+        XCTAssertTrue(app.staticTexts["3 selected"].waitForExistence(timeout: 5), "20 random should fill back in from the only unselected video")
+
+        attachScreenshot(from: app, named: "select-menu-running-total")
+    }
+
+    /// End-to-end coverage for the categorize feature: creating a category
+    /// from the playback screen's tray, selecting it (closes the tray),
+    /// seeing it reflected in the Library's Categories view with the right
+    /// count, then removing the video from it via swipe (count goes back to
+    /// zero) — the two places categories can change, per the feature spec.
+    func testCategorizeFromPlaybackAndRemoveFromLibrary() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Seed local fixture videos (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Seeded 3 fixture video(s)."].waitForExistence(timeout: 10))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["Videos"].tap()
+
+        let row = app.descendants(matching: .any).matching(identifier: "videoRow_DbvVH3RTq9w").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 10))
+
+        // Open the tray and create a brand new category.
+        app.buttons["categorizeButton"].tap()
+        XCTAssertTrue(app.buttons["addCategoryButton"].waitForExistence(timeout: 5))
+        app.buttons["addCategoryButton"].tap()
+
+        let nameField = app.textFields["Category name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        nameField.typeText("Comedy")
+        // Scoped to the alert specifically — the "+" button underneath also
+        // resolves to an "Add" accessibility label (auto-derived from its
+        // SF Symbol), ambiguous with the alert's own Add action otherwise.
+        app.alerts["New Category"].buttons["Add"].tap()
+
+        // Creating it should select it immediately and close the tray.
+        XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 5), "tray should close after adding a category")
+        attachScreenshot(from: app, named: "categorized-video")
+
+        // Reopening the tray should show the new category checked, above
+        // "None" at the bottom.
+        app.buttons["categorizeButton"].tap()
+        let categoryRow = app.buttons["categoryRow_Comedy"]
+        XCTAssertTrue(categoryRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["categoryRow_None"].exists)
+        // Dismiss the tray without changing anything.
+        app.swipeDown(velocity: .fast)
+
+        app.buttons["playbackDismiss"].tap()
+
+        // Library should reflect the new category with a count of 1.
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["Categories"].tap()
+        XCTAssertTrue(app.staticTexts["Comedy"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1"].waitForExistence(timeout: 5))
+
+        app.staticTexts["Comedy"].tap()
+        let categorizedRow = app.descendants(matching: .any).matching(identifier: "videoRow_DbvVH3RTq9w").firstMatch
+        XCTAssertTrue(categorizedRow.waitForExistence(timeout: 5))
+
+        // Swipe-to-remove takes it back out of the category.
+        categorizedRow.swipeLeft()
+        app.buttons["Remove"].tap()
+        XCTAssertFalse(categorizedRow.waitForExistence(timeout: 5), "video should be gone from the category after removing")
+
+        app.navigationBars.buttons.firstMatch.tap() // back to Categories
+        XCTAssertTrue(app.staticTexts["0"].waitForExistence(timeout: 5), "count should drop back to 0 after removal")
+    }
+
+    /// Diagnostic for a reported bug: the category tray is buggy when
+    /// playback is opened from Home's "Recently Added" list specifically,
+    /// while working fine from Library lists. Mirrors
+    /// testCategorizeFromPlaybackAndRemoveFromLibrary but opens the video
+    /// directly from Home instead of navigating into Library first.
+    func testCategorizeFromRecentlyAddedOnHome() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Seed local fixture videos (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Seeded 3 fixture video(s)."].waitForExistence(timeout: 10))
+        app.buttons["Done"].tap()
+
+        // Stay on Home — don't navigate to Library at all. This is the
+        // regression case: playback presented from a row that's a direct
+        // child of Home's own NavigationStack root (as opposed to a row on
+        // a *pushed* view, like Library → Videos) — see PlaybackCoordinator
+        // for why that distinction used to matter.
+        let row = app.descendants(matching: .any).matching(identifier: "videoRow_DbvVH3RTq9w").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "should appear directly in Recently Added on Home")
+        row.tap()
+        XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 10))
+
+        app.buttons["categorizeButton"].tap()
+        XCTAssertTrue(app.buttons["addCategoryButton"].waitForExistence(timeout: 5), "tray should open and stay open")
+        app.buttons["addCategoryButton"].tap()
+
+        let nameField = app.textFields["Category name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        nameField.typeText("Comedy")
+        app.alerts["New Category"].buttons["Add"].tap()
+
+        XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 5), "tray should close after adding a category")
+        attachScreenshot(from: app, named: "categorized-from-home")
+    }
+
     private func attachScreenshot(from app: XCUIApplication, named name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name

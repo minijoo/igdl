@@ -12,6 +12,9 @@ struct PlaybackPageView: View {
     let video: Video
     let player: AVPlayer?
     let isActive: Bool
+    // Owned by PlaybackView, not local @State here — see PlaybackView's
+    // categorizingVideo for why.
+    let onCategorize: () -> Void
 
     @State private var isPaused = false
     @State private var isMuted = false
@@ -47,7 +50,13 @@ struct PlaybackPageView: View {
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                videoArea(height: showingComments ? geometry.size.height * 0.45 : geometry.size.height)
+                videoArea(
+                    height: showingComments ? geometry.size.height * 0.45 : geometry.size.height,
+                    // Only relevant full-screen — once comments are showing,
+                    // the video area (and its scrubber) no longer reaches
+                    // the true bottom edge, so there's nothing to clear.
+                    bottomSafeArea: showingComments ? 0 : geometry.safeAreaInsets.bottom
+                )
 
                 if showingComments {
                     commentsArea
@@ -80,7 +89,7 @@ struct PlaybackPageView: View {
     }
 
     @ViewBuilder
-    private func videoArea(height: CGFloat) -> some View {
+    private func videoArea(height: CGFloat, bottomSafeArea: CGFloat) -> some View {
         ZStack {
             if let player {
                 PlayerLayerView(player: player)
@@ -105,7 +114,7 @@ struct PlaybackPageView: View {
             VStack(spacing: 0) {
                 Spacer()
                 bottomInfoBar
-                scrubberBar
+                scrubberBar(bottomSafeArea: bottomSafeArea)
             }
         }
         .frame(height: height)
@@ -139,6 +148,19 @@ struct PlaybackPageView: View {
     private var bottomInfoBar: some View {
         VStack(alignment: .trailing, spacing: 12) {
             if !showingComments {
+                // Icon-only, no label — sits directly above the comments
+                // button in this same trailing icon stack.
+                Button {
+                    onCategorize()
+                } label: {
+                    Image(systemName: "tag")
+                        .foregroundStyle(.white)
+                }
+                // Same isActive-scoping reasoning as captionText/scrubber
+                // elsewhere in this file — the pre-rendered swipe-neighbor
+                // page has one of these alive at the same time.
+                .accessibilityIdentifier(isActive ? "categorizeButton" : "inactive-categorizeButton")
+
                 Button {
                     showingComments = true
                     loadCommentsIfNeeded()
@@ -202,58 +224,69 @@ struct PlaybackPageView: View {
     /// A subtle scrubber: a thin full-width track with a slim vertical bar
     /// (not a round knob) marking/dragging the current position. Sits in
     /// its own solid-black strip directly below the caption tray.
-    private var scrubberBar: some View {
-        GeometryReader { geo in
-            let thumbX = geo.size.width * progress
+    ///
+    /// The interactive track itself stays a fixed 32pt tall — bottomSafeArea
+    /// is added as plain black space *below* it, not as padding inside the
+    /// GeometryReader, so the drag math (which reads geo.size directly)
+    /// doesn't need to account for it. This just lifts the touchable track
+    /// clear of the home indicator's own swipe-up gesture zone, which it
+    /// otherwise sat flush against and intercepted touches from.
+    private func scrubberBar(bottomSafeArea: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            GeometryReader { geo in
+                let thumbX = geo.size.width * progress
 
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.white.opacity(0.25))
-                    .frame(height: 2)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(height: 2)
 
-                Capsule()
-                    .fill(Color.white.opacity(0.7))
-                    .frame(width: thumbX, height: 2)
+                    Capsule()
+                        .fill(Color.white.opacity(0.7))
+                        .frame(width: thumbX, height: 2)
 
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.white)
-                    .frame(width: 3, height: 16)
-                    .position(x: thumbX, y: geo.size.height / 2)
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Color.white)
+                        .frame(width: 3, height: 16)
+                        .position(x: thumbX, y: geo.size.height / 2)
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                // Only the active page's element is named "scrubber" — the
+                // pre-rendered swipe-neighbor page (see PlaybackView) also has
+                // one alive in the hierarchy at the same time, and unlike
+                // showComments/hideComments elsewhere in these tests, there's no
+                // distinguishing label to disambiguate by, so ambiguity has to
+                // be avoided at the source instead.
+                .accessibilityIdentifier(isActive ? "scrubber" : "inactive-scrubber")
+                // Exposes real elapsed-time progress (not just the visual thumb
+                // position) so a UI test can confirm long-press-to-2x actually
+                // changes playback rate, rather than just toggling a badge.
+                .accessibilityValue("\(currentTime)")
+                // highPriorityGesture so this wins over the video area's
+                // ancestor .onLongPressGesture for actually seeking; the
+                // isTouchingOverlay flag (set here, same reasoning as the
+                // caption's gesture above) is what stops that ancestor gesture
+                // from also toggling play/pause once the drag ends.
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            isTouchingOverlay = true
+                            isDragging = true
+                            dragProgress = min(max(value.location.x / geo.size.width, 0), 1)
+                        }
+                        .onEnded { value in
+                            let ratio = min(max(value.location.x / geo.size.width, 0), 1)
+                            seek(to: ratio)
+                            isDragging = false
+                            isTouchingOverlay = false
+                        }
+                )
             }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-            // Only the active page's element is named "scrubber" — the
-            // pre-rendered swipe-neighbor page (see PlaybackView) also has
-            // one alive in the hierarchy at the same time, and unlike
-            // showComments/hideComments elsewhere in these tests, there's no
-            // distinguishing label to disambiguate by, so ambiguity has to
-            // be avoided at the source instead.
-            .accessibilityIdentifier(isActive ? "scrubber" : "inactive-scrubber")
-            // Exposes real elapsed-time progress (not just the visual thumb
-            // position) so a UI test can confirm long-press-to-2x actually
-            // changes playback rate, rather than just toggling a badge.
-            .accessibilityValue("\(currentTime)")
-            // highPriorityGesture so this wins over the video area's
-            // ancestor .onLongPressGesture for actually seeking; the
-            // isTouchingOverlay flag (set here, same reasoning as the
-            // caption's gesture above) is what stops that ancestor gesture
-            // from also toggling play/pause once the drag ends.
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        isTouchingOverlay = true
-                        isDragging = true
-                        dragProgress = min(max(value.location.x / geo.size.width, 0), 1)
-                    }
-                    .onEnded { value in
-                        let ratio = min(max(value.location.x / geo.size.width, 0), 1)
-                        seek(to: ratio)
-                        isDragging = false
-                        isTouchingOverlay = false
-                    }
-            )
+            .frame(height: 32)
+
+            Color.black.frame(height: bottomSafeArea)
         }
-        .frame(height: 32)
         .background(Color.black)
     }
 

@@ -48,6 +48,44 @@ struct DownloadView: View {
             }
         }
         .navigationTitle("Download")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu("Select…") {
+                    // 20 videos is roughly 20-30 minutes of typical Reels
+                    // length — a reasonable single batch to queue up without
+                    // the user having to hand-pick from thousands of items.
+                    Button {
+                        selectFromTop(count: 20)
+                    } label: {
+                        Label("20 from top", systemImage: "list.bullet")
+                    }
+                    .accessibilityIdentifier("select20FromTop")
+
+                    Button {
+                        selectRandom(count: 20)
+                    } label: {
+                        Label("20 random", systemImage: "shuffle")
+                    }
+                    .accessibilityIdentifier("select20Random")
+                }
+                .accessibilityIdentifier("selectMenu")
+                .disabled(selectableVideos.isEmpty)
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            if !pendingVideos.isEmpty {
+                HStack {
+                    Text("\(selected.count) selected")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("selectedCount")
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             if !selectableVideos.isEmpty {
                 Button {
@@ -146,6 +184,28 @@ struct DownloadView: View {
             selected.remove(shortCode)
         } else {
             selected.insert(shortCode)
+        }
+    }
+
+    /// Adds up to `count` more selections from the front of the currently
+    /// displayed (most-recent-first) order, skipping anything already
+    /// selected — repeatable: calling this again picks up where the last
+    /// call left off, since it only ever looks at what's still unselected.
+    private func selectFromTop(count: Int) {
+        let unselected = selectableVideos.filter { !selected.contains($0.shortCode) }
+        for video in unselected.prefix(count) {
+            selected.insert(video.shortCode)
+        }
+    }
+
+    /// Adds up to `count` more random selections from whatever isn't
+    /// already selected — repeatable, and never re-picks an already-
+    /// selected video the way a plain random sample without filtering
+    /// first could.
+    private func selectRandom(count: Int) {
+        let unselected = selectableVideos.filter { !selected.contains($0.shortCode) }
+        for video in unselected.shuffled().prefix(count) {
+            selected.insert(video.shortCode)
         }
     }
 

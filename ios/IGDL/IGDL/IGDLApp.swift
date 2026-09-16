@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AVFoundation
 
 @main
 struct IGDLApp: App {
@@ -9,6 +10,13 @@ struct IGDLApp: App {
             Self.deleteExistingStore()
         }
         #endif
+        // Default audio session category respects the hardware silent
+        // switch, which every Reels/TikTok-style video app overrides —
+        // users expect video sound to play regardless of the mute switch,
+        // only actually silenced by the in-app mute button or Do Not
+        // Disturb/ringer-independent system volume. .playback is the
+        // standard category for this.
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
     }
 
     var body: some Scene {

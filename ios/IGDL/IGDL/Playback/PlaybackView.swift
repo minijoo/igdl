@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import SwiftData
 
 /// Vertical Reels-style pager. Only the current page ± 1 get a live
 /// AVPlayer — with potentially thousands of videos in a playlist, one
@@ -14,6 +15,10 @@ struct PlaybackView: View {
     @State private var scrollPosition: Int?
     @State private var players: [Int: AVPlayer] = [:]
     @State private var loopObservers: [Int: NSObjectProtocol] = [:]
+    // Not local @State inside PlaybackPageView — see PlaybackCoordinator
+    // (which is why *this whole view* is now presented from RootTabView
+    // instead of per-row) for the bug that caused.
+    @State private var categorizingVideo: Video?
 
     var body: some View {
         // A ZStack that itself respects the safe area, with only the video
@@ -27,10 +32,21 @@ struct PlaybackView: View {
                         PlaybackPageView(
                             video: video,
                             player: players[index],
-                            isActive: index == scrollPosition
+                            isActive: index == scrollPosition,
+                            onCategorize: { categorizingVideo = video }
                         )
                         .containerRelativeFrame(.vertical)
-                        .id(index)
+                        // Identity is the video's own stable persistent id,
+                        // not its array position — see docs/plan.md for why:
+                        // index-based identity meant any upstream re-render
+                        // that rebuilt `videos` (even with the exact same
+                        // videos) could make SwiftUI treat "index 2" as a
+                        // brand new page instead of recognizing it as the
+                        // same video that was already there, tearing down
+                        // and recreating every page's @State (silently
+                        // closing anything presented from it, like the
+                        // category tray).
+                        .id(video.persistentModelID)
                     }
                 }
                 .scrollTargetLayout()
@@ -55,6 +71,9 @@ struct PlaybackView: View {
             .padding(8)
         }
         .background(Color.black)
+        .sheet(item: $categorizingVideo) { video in
+            CategoryTrayView(video: video)
+        }
         // Swipe right to dismiss, like iOS's edge-swipe-back — a horizontal
         // gesture, so it doesn't fight the vertical paging gesture.
         .gesture(

@@ -17,6 +17,13 @@ final class Video {
     var takenAt: Int
     var sources: [String]
     var fetched: Bool
+    // When this video's file actually landed on-device — distinct from
+    // `takenAt` (when the post was originally made). Home's "Recently
+    // Added" sorts by this (most recently downloaded first); Library's
+    // "Videos" list intentionally keeps sorting by `takenAt` instead (see
+    // docs/plan.md) — the two lists answer different questions ("what did
+    // I just get" vs "what did I originally post/like, in order").
+    var downloadedAt: Date?
 
     var category: Category?
     var playlists: [Playlist] = []
@@ -35,7 +42,8 @@ final class Video {
         userProfilePicURL: String?,
         takenAt: Int,
         sources: [String],
-        fetched: Bool = false
+        fetched: Bool = false,
+        downloadedAt: Date? = nil
     ) {
         self.pk = pk
         self.shortCode = shortCode
@@ -51,6 +59,7 @@ final class Video {
         self.takenAt = takenAt
         self.sources = sources
         self.fetched = fetched
+        self.downloadedAt = downloadedAt
     }
 
     /// "M:SS", e.g. "1:15" for 75.3 seconds. Nil when duration isn't known.

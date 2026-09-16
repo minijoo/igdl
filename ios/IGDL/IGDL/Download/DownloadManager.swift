@@ -109,6 +109,7 @@ final class DownloadManager {
         let descriptor = FetchDescriptor<Video>(predicate: #Predicate { $0.shortCode == shortCode })
         if let video = try? context.fetch(descriptor).first {
             video.fetched = true
+            video.downloadedAt = .now
             // The backend's caption is freshly scraped, so it's the latest
             // version — worth refreshing over whatever the headers file
             // snapshot had, but only if we actually got one.

@@ -31,6 +31,19 @@ struct DownloadView: View {
                     description: Text("Every synced video has already been downloaded.")
                 )
             } else {
+                // A plain row in the list's own content, not
+                // .safeAreaInset(edge: .top) — that overlapped the
+                // navigation title's large-title area instead of sitting
+                // below it.
+                HStack {
+                    Text("\(selected.count) selected")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("selectedCount")
+                    Spacer()
+                }
+                .listRowSeparator(.hidden)
+
                 if !downloadingVideos.isEmpty {
                     Section("Downloading") {
                         ForEach(downloadingVideos) { video in
@@ -70,20 +83,6 @@ struct DownloadView: View {
                 }
                 .accessibilityIdentifier("selectMenu")
                 .disabled(selectableVideos.isEmpty)
-            }
-        }
-        .safeAreaInset(edge: .top) {
-            if !pendingVideos.isEmpty {
-                HStack {
-                    Text("\(selected.count) selected")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("selectedCount")
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(.bar)
             }
         }
         .safeAreaInset(edge: .bottom) {

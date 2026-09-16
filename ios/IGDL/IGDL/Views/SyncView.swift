@@ -124,6 +124,7 @@ struct SyncView: View {
                     try Data(contentsOf: fixtureDir.appendingPathComponent("comments.json")).write(to: commentsURL)
                 }
                 video.fetched = true
+                video.downloadedAt = .now
                 seeded += 1
             } catch {
                 continue

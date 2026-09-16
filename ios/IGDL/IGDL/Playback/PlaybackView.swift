@@ -53,6 +53,7 @@ struct PlaybackView: View {
             }
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $scrollPosition)
+            .scrollIndicators(.hidden)
             .ignoresSafeArea()
 
             Button { dismiss() } label: {

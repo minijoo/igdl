@@ -2,9 +2,11 @@ import SwiftUI
 import SwiftData
 
 struct HomeView: View {
-    // Only fetched videos are useful to show here — header-only data (no
-    // local file yet) isn't something the user can watch or organize.
-    @Query(filter: #Predicate<Video> { $0.fetched }, sort: \Video.takenAt, order: .reverse)
+    // "Recently Added" means most recently *downloaded*, not most recently
+    // posted/liked on Instagram — sorted by downloadedAt, not takenAt
+    // (contrast with Library's "Videos" list, which intentionally keeps
+    // takenAt — see docs/plan.md and Video.downloadedAt).
+    @Query(filter: #Predicate<Video> { $0.fetched }, sort: \Video.downloadedAt, order: .reverse)
     private var fetchedVideos: [Video]
     @Query(sort: \Playlist.name) private var playlists: [Playlist]
     @Query(filter: #Predicate<Video> { !$0.fetched }) private var pendingVideos: [Video]

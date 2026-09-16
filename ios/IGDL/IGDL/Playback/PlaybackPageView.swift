@@ -285,7 +285,10 @@ struct PlaybackPageView: View {
             }
             .frame(height: 32)
 
-            Color.black.frame(height: bottomSafeArea)
+            // A fixed buffer on top of the device's own safe-area inset —
+            // the inset alone still wasn't enough visual separation from
+            // the home indicator in practice.
+            Color.black.frame(height: bottomSafeArea + 20)
         }
         .background(Color.black)
     }

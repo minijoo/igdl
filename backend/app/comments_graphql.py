@@ -71,7 +71,24 @@ def fetch_top_comments(session: requests.Session, short_code: str, media_id: str
     byte-exact replay of a real captured request fails once those go
     stale), so every call re-scrapes them from a fresh load of the post
     page first — there's no way to cache and reuse them across calls.
+
+    Every requests-level failure (a raise_for_status() 4xx/5xx — a 429 in
+    particular, since this hits Instagram a second/third time per post on
+    top of the from_shortcode call — a connection error, a timeout) is
+    normalized to CommentsFetchError here. Without this, a raw
+    requests.exceptions.RequestException would propagate past
+    instagram.py's `except comments_graphql.CommentsFetchError` (it only
+    matches that one type), defeating the "comments are best-effort" intent
+    entirely: a transient comments-only failure would kill the whole
+    resolve, including the video/cover URLs that had already resolved fine.
     """
+    try:
+        return _fetch_top_comments(session, short_code, media_id)
+    except requests.exceptions.RequestException as e:
+        raise CommentsFetchError(f"request failed: {e}") from e
+
+
+def _fetch_top_comments(session: requests.Session, short_code: str, media_id: str) -> list[dict]:
     page_url = f"https://www.instagram.com/p/{short_code}/"
     page = session.get(page_url, headers={"user-agent": WEB_USER_AGENT}, timeout=15)
     page.raise_for_status()

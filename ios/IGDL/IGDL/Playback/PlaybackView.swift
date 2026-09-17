@@ -8,8 +8,13 @@ import SwiftData
 /// play immediately on swipe release rather than loading fresh at that
 /// moment.
 struct PlaybackView: View {
-    let videos: [Video]
-    let startIndex: Int
+    let queue: PlaybackQueue
+    // Reads through to `queue.videos` fresh every time (rather than
+    // snapshotting it once) so a dynamic (shuffle-all) queue growing via
+    // `queue.ensureBuffer` is picked up automatically — this view doesn't
+    // need to know or care whether it's playing a fixed or dynamic queue.
+    private var videos: [Video] { queue.videos }
+    private var startIndex: Int { queue.startIndex }
 
     @Environment(\.dismiss) private var dismiss
     @State private var scrollPosition: Int?
@@ -88,10 +93,12 @@ struct PlaybackView: View {
         .onAppear {
             scrollPosition = startIndex
             updatePlayers(around: startIndex)
+            queue.ensureBuffer(current: startIndex)
         }
         .onChange(of: scrollPosition) { _, newValue in
             guard let newValue else { return }
             updatePlayers(around: newValue)
+            queue.ensureBuffer(current: newValue)
         }
         .onDisappear {
             for (_, token) in loopObservers { NotificationCenter.default.removeObserver(token) }

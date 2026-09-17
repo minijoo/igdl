@@ -15,9 +15,9 @@ import Foundation
 /// list originally launched playback.
 @Observable
 final class PlaybackCoordinator {
-    var playback: PlayableList?
+    var playback: PlaybackQueue?
 
-    func play(_ list: PlayableList?) {
-        playback = list
+    func play(_ queue: PlaybackQueue?) {
+        playback = queue
     }
 }

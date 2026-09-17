@@ -24,6 +24,12 @@ final class Video {
     // docs/plan.md) — the two lists answer different questions ("what did
     // I just get" vs "what did I originally post/like, in order").
     var downloadedAt: Date?
+    // Discovered lazily, not known at import time: flipped to false only
+    // after a real resolve attempt fails with "post has no video" (a
+    // slideshow/carousel post, not an actual Reel — see docs/plan.md's
+    // "Incompatible videos" item). Permanent once set; there's no download
+    // retry that could ever fix a post that structurally has no video.
+    var isVideo: Bool = true
 
     var category: Category?
     var playlists: [Playlist] = []
@@ -43,7 +49,8 @@ final class Video {
         takenAt: Int,
         sources: [String],
         fetched: Bool = false,
-        downloadedAt: Date? = nil
+        downloadedAt: Date? = nil,
+        isVideo: Bool = true
     ) {
         self.pk = pk
         self.shortCode = shortCode
@@ -60,6 +67,7 @@ final class Video {
         self.sources = sources
         self.fetched = fetched
         self.downloadedAt = downloadedAt
+        self.isVideo = isVideo
     }
 
     /// "M:SS", e.g. "1:15" for 75.3 seconds. Nil when duration isn't known.

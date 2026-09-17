@@ -1,8 +1,16 @@
+import logging
 import os
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from . import instagram
+
+# uvicorn only configures its own "uvicorn"/"uvicorn.access"/"uvicorn.error"
+# loggers — without this, instagram.py's "igdl.resolve" logger has no
+# handler anywhere in its chain and its records are silently dropped. This
+# attaches one to the root logger, which is what journald actually captures
+# (the systemd unit's StandardOutput/StandardError are both `journal`).
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
 
 app = FastAPI(title='IGDL Backend')
 

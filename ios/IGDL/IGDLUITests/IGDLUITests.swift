@@ -73,7 +73,7 @@ final class IGDLUITests: XCTestCase {
 
         // Grab a mid-flight shot of the "Downloading" section with real
         // per-item progress, before it's had time to complete.
-        _ = app.staticTexts["Downloading"].waitForExistence(timeout: 5)
+        _ = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Downloading ('")).firstMatch.waitForExistence(timeout: 5)
         attachScreenshot(from: app, named: "downloading-in-progress")
 
         // A successfully downloaded video sets fetched=true, which the
@@ -113,7 +113,7 @@ final class IGDLUITests: XCTestCase {
         }
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download Selected'")).firstMatch.tap()
 
-        XCTAssertTrue(app.staticTexts["Downloading"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Downloading ('")).firstMatch.waitForExistence(timeout: 5))
 
         // Navigate away to another tab and back while the download is still
         // in flight.
@@ -121,7 +121,7 @@ final class IGDLUITests: XCTestCase {
         app.tabBars.buttons["Downloads"].tap()
 
         XCTAssertTrue(
-            app.staticTexts["Downloading"].waitForExistence(timeout: 5),
+            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Downloading ('")).firstMatch.waitForExistence(timeout: 5),
             "the in-progress download section should still be there after switching tabs, not reset"
         )
         attachScreenshot(from: app, named: "downloading-persists-after-tab-switch")
@@ -162,7 +162,7 @@ final class IGDLUITests: XCTestCase {
         }
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download Selected'")).firstMatch.tap()
 
-        XCTAssertTrue(app.staticTexts["Downloading"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Downloading ('")).firstMatch.waitForExistence(timeout: 5))
 
         // Suspend the app for real (unlike a tab switch) by pressing home,
         // then give it time well beyond how long a foreground-only transfer
@@ -582,6 +582,32 @@ final class IGDLUITests: XCTestCase {
         attachScreenshot(from: app, named: "select-menu-running-total")
     }
 
+    /// The Select… menu's "Clear Selection" option should wipe the current
+    /// running total in one tap, without needing to hand-uncheck every box.
+    func testClearSelectionResetsCount() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Downloads"].tap()
+
+        app.buttons["selectMenu"].tap()
+        app.buttons["select20FromTop"].tap()
+        XCTAssertTrue(app.staticTexts["3 selected"].waitForExistence(timeout: 5))
+
+        app.buttons["selectMenu"].tap()
+        app.buttons["clearSelection"].tap()
+        XCTAssertTrue(app.staticTexts["0 selected"].waitForExistence(timeout: 5))
+    }
+
     /// End-to-end coverage for the categorize feature: creating a category
     /// from the playback screen's tray, selecting it (closes the tray),
     /// seeing it reflected in the Library's Categories view with the right
@@ -733,6 +759,38 @@ final class IGDLUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars[creatorName].waitForExistence(timeout: 10), "should navigate to that creator's detail view without freezing")
         attachScreenshot(from: app, named: "creator-detail")
+    }
+
+    /// Smoke test for Shuffle All (see docs/plan.md): confirms the button
+    /// shows up once there's at least one downloaded video, and tapping it
+    /// opens playback rather than doing nothing. PlaybackQueue's dynamic
+    /// growth logic itself (ensureBuffer topping the queue back up as
+    /// playback advances) is covered by fast unit tests in IGDLTests
+    /// (PlaybackQueueTests) — no need for a large seeded fixture just to
+    /// exercise that here.
+    func testShuffleAllOpensPlayback() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Seed local fixture videos (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Seeded 3 fixture video(s)."].waitForExistence(timeout: 10))
+        app.buttons["Done"].tap()
+
+        XCTAssertTrue(app.buttons["shuffleAllButton"].waitForExistence(timeout: 5))
+        app.buttons["shuffleAllButton"].tap()
+
+        XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 10), "Shuffle All should open playback")
+        attachScreenshot(from: app, named: "shuffle-all-playback")
+
+        app.buttons["playbackDismiss"].tap()
+        XCTAssertTrue(app.navigationBars["IGDL"].waitForExistence(timeout: 5), "dismissing should return to Home")
     }
 
     private func attachScreenshot(from app: XCUIApplication, named name: String) {

@@ -120,7 +120,17 @@ final class DownloadManager {
                 }
             )
         } catch {
-            states[shortCode] = .failed(String(describing: error))
+            let message = Self.describe(error)
+            // Printed via NSLog (not print — see docs/plan.md, print() from
+            // the app under test doesn't reach xcodebuild's piped stdout,
+            // and this is the same "actually visible in the device console"
+            // concern for real on-device debugging) so a resolve failure has
+            // a client-side trace even when nothing reached the backend's
+            // own logs at all (e.g. a request cancelled while still queued
+            // behind the backend's resolve lock).
+            NSLog("[IGDL] resolve failed shortCode=%@ error=%@", shortCode, message)
+            markIncompatibleIfNeeded(shortCode: shortCode, message: message, context: context)
+            states[shortCode] = .failed(message)
         }
     }
 
@@ -129,7 +139,44 @@ final class DownloadManager {
         case .success:
             states[shortCode] = .done
         case .failure(let error):
-            states[shortCode] = .failed(String(describing: error))
+            let message = Self.describe(error)
+            NSLog("[IGDL] download failed shortCode=%@ error=%@", shortCode, message)
+            states[shortCode] = .failed(message)
+        }
+    }
+
+    /// A short, human-readable reason — shown in the UI (see DownloadView's
+    /// failed row) and logged, rather than a raw `String(describing:)` dump
+    /// (which for a URLError includes a whole NSError UserInfo blob).
+    private static func describe(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut: return "Timed out"
+            case .notConnectedToInternet, .networkConnectionLost: return "No network connection"
+            case .cancelled: return "Cancelled"
+            default: return urlError.localizedDescription
+            }
+        }
+        if case .badStatusCode(let code, let message)? = error as? BackendClientError {
+            return message ?? "Server returned \(code)"
+        }
+        return String(describing: error)
+    }
+
+    /// "post has no video" is the backend's exact wording (see
+    /// backend/app/instagram.py) for a slideshow/carousel post — a
+    /// permanent, not-network-related failure, not something a retry could
+    /// ever fix. Flagging it here means the Download screen can file it
+    /// under "Not Reels" from now on instead of leaving it to fail the same
+    /// way every time it's selected again.
+    private static let notReelsErrorMessage = "post has no video"
+
+    private func markIncompatibleIfNeeded(shortCode: String, message: String, context: ModelContext) {
+        guard message == Self.notReelsErrorMessage else { return }
+        let descriptor = FetchDescriptor<Video>(predicate: #Predicate { $0.shortCode == shortCode })
+        if let video = try? context.fetch(descriptor).first {
+            video.isVideo = false
+            try? context.save()
         }
     }
 

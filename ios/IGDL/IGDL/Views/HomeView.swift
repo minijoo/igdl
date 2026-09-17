@@ -12,6 +12,7 @@ struct HomeView: View {
     @Query(filter: #Predicate<Video> { !$0.fetched }) private var pendingVideos: [Video]
 
     @State private var showingSync = false
+    @Environment(PlaybackCoordinator.self) private var coordinator
 
     private var recentlyAdded: [Video] {
         Array(fetchedVideos.prefix(6))
@@ -36,6 +37,28 @@ struct HomeView: View {
                             }
                         }
                     }
+                }
+
+                if !fetchedVideos.isEmpty {
+                    // Starts a playback queue that's seeded with just a
+                    // handful of random videos and grows itself as playback
+                    // advances (see PlaybackQueue) — this only needs the
+                    // whole library up front to shuffle from, not to build
+                    // out the full queue immediately.
+                    Section {
+                        Button {
+                            coordinator.play(PlaybackQueue(shuffling: fetchedVideos))
+                        } label: {
+                            Label("Shuffle All", systemImage: "shuffle")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .accessibilityIdentifier("shuffleAllButton")
+                    }
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
 
                 if fetchedVideos.isEmpty {

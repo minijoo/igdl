@@ -21,8 +21,8 @@ struct RootTabView: View {
         .environment(coordinator)
         // Presented once, here — see PlaybackCoordinator for why this can't
         // live per-row inside each list anymore.
-        .fullScreenCover(item: $coordinator.playback) { list in
-            PlaybackView(videos: list.videos, startIndex: list.startIndex)
+        .fullScreenCover(item: $coordinator.playback) { queue in
+            PlaybackView(queue: queue)
         }
     }
 }

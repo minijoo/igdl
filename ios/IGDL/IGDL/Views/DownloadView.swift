@@ -13,16 +13,29 @@ struct DownloadView: View {
     @State private var manager = DownloadManager()
     @State private var isDownloading = false
 
+    // Videos discovered (via a prior failed resolve — see DownloadManager)
+    // to be a slideshow/carousel post rather than an actual Reel. Excluded
+    // from both sections below entirely: retrying can never succeed for
+    // these, so they get their own read-only section instead of cluttering
+    // "Ready for Download" or repeatedly failing in "Downloading".
+    private var notReelsVideos: [Video] {
+        pendingVideos.filter { !$0.isVideo }
+    }
+
+    private var downloadableVideos: [Video] {
+        pendingVideos.filter(\.isVideo)
+    }
+
     // Split so a batch actually in progress (or that just failed) is
     // visually separated from the plain selectable list, with a real
     // per-item progress indicator instead of one perpetual, uninformative
     // spinner for the whole screen.
     private var downloadingVideos: [Video] {
-        pendingVideos.filter { manager.state(for: $0.shortCode).isActiveOrFinished }
+        downloadableVideos.filter { manager.state(for: $0.shortCode).isActiveOrFinished }
     }
 
     private var selectableVideos: [Video] {
-        pendingVideos.filter { !manager.state(for: $0.shortCode).isActiveOrFinished }
+        downloadableVideos.filter { !manager.state(for: $0.shortCode).isActiveOrFinished }
     }
 
     var body: some View {
@@ -55,16 +68,23 @@ struct DownloadView: View {
                     .listRowSeparator(.hidden)
 
                     if !downloadingVideos.isEmpty {
-                        Section("Downloading") {
+                        Section("Downloading (\(downloadingVideos.count))") {
                             ForEach(downloadingVideos) { video in
                                 downloadingRow(for: video)
                             }
                         }
                     }
                     if !selectableVideos.isEmpty {
-                        Section {
+                        Section("Ready for Download (\(selectableVideos.count))") {
                             ForEach(selectableVideos) { video in
                                 selectableRow(for: video)
+                            }
+                        }
+                    }
+                    if !notReelsVideos.isEmpty {
+                        Section("Not Reels (\(notReelsVideos.count))") {
+                            ForEach(notReelsVideos) { video in
+                                notReelsRow(for: video)
                             }
                         }
                     }
@@ -90,9 +110,17 @@ struct DownloadView: View {
                             Label("20 random", systemImage: "shuffle")
                         }
                         .accessibilityIdentifier("select20Random")
+
+                        Button(role: .destructive) {
+                            selected.removeAll()
+                        } label: {
+                            Label("Clear Selection", systemImage: "xmark.circle")
+                        }
+                        .accessibilityIdentifier("clearSelection")
+                        .disabled(selected.isEmpty)
                     }
                     .accessibilityIdentifier("selectMenu")
-                    .disabled(selectableVideos.isEmpty)
+                    .disabled(selectableVideos.isEmpty && selected.isEmpty)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -136,6 +164,20 @@ struct DownloadView: View {
         }
     }
 
+    /// Read-only — no checkbox, no retry. A slideshow/carousel post has no
+    /// video to download regardless of how many times it's attempted.
+    @ViewBuilder
+    private func notReelsRow(for video: Video) -> some View {
+        HStack {
+            VideoRow(video: video)
+            Spacer()
+            Text("Not a Reel")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("notReelsRow_\(video.shortCode)")
+    }
+
     @ViewBuilder
     private func downloadingRow(for video: Video) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -168,13 +210,19 @@ struct DownloadView: View {
                     .font(.caption2)
                     .foregroundStyle(.green)
 
-            case .failed:
+            case .failed(let reason):
                 Button {
                     manager.resetState(shortCode: video.shortCode)
                 } label: {
-                    Label("Failed — tap to retry", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Failed — tap to retry", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text(reason)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .accessibilityIdentifier("retry_\(video.shortCode)")
             }

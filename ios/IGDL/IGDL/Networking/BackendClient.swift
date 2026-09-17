@@ -17,7 +17,14 @@ struct ResolvedPost: Decodable {
 }
 
 enum BackendClientError: Error {
-    case badStatusCode(Int)
+    case badStatusCode(Int, message: String?)
+}
+
+/// FastAPI's default HTTPException body shape (`{"detail": "..."}`) — used
+/// to recover the actual reason (e.g. "post has no video") instead of just
+/// the bare status code.
+private struct BackendErrorBody: Decodable {
+    let detail: String
 }
 
 /// Talks to the IGDL backend (see backend/app/main.py). One synchronous
@@ -51,15 +58,26 @@ final class BackendClient {
         components.queryItems = [URLQueryItem(name: "short_code", value: shortCode)]
         var request = URLRequest(url: components.url!)
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
+        // The backend serializes every resolve behind one global lock (only
+        // one Instagram-facing call in flight at a time, deliberately — see
+        // docs/plan.md) — DownloadManager sends up to 4 of these
+        // concurrently, so a request can legitimately spend a while just
+        // waiting its turn. The default 60s URLSession timeout was tight
+        // enough to occasionally cancel a request still queued behind the
+        // lock, which (since it never got a response) also never showed up
+        // in the backend's own logs, making it look like the request never
+        // arrived at all.
+        request.timeoutInterval = 120
         let (data, response) = try await session.data(for: request)
-        try Self.checkStatus(response)
+        try Self.checkStatus(response, data: data)
         return try JSONDecoder().decode(ResolvedPost.self, from: data)
     }
 
-    private static func checkStatus(_ response: URLResponse) throws {
+    private static func checkStatus(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
-            throw BackendClientError.badStatusCode(http.statusCode)
+            let message = try? JSONDecoder().decode(BackendErrorBody.self, from: data).detail
+            throw BackendClientError.badStatusCode(http.statusCode, message: message)
         }
     }
 }

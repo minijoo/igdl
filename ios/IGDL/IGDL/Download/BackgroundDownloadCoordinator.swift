@@ -140,6 +140,17 @@ final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate,
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         guard let (shortCode, kind) = Self.parse(taskDescription: downloadTask.taskDescription) else { return }
+        // A transfer "finishing" only means the response body was fully
+        // received, not that it was actually the asset — an expired/invalid
+        // CDN URL (e.g. a signed URL that expired while this task sat queued
+        // behind others in a big batch) still "finishes downloading" a
+        // normal error response body, which without this check would get
+        // silently moved into MediaStore and marked fetched=true as if it
+        // were a real video.
+        if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            failed(shortCode: shortCode, error: BackendClientError.badStatusCode(http.statusCode, message: nil))
+            return
+        }
         do {
             let destination = try kind == .video ? MediaStore.videoURL(shortCode: shortCode) : MediaStore.coverURL(shortCode: shortCode)
             // Must move synchronously here — the temp file at `location` is

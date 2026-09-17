@@ -21,7 +21,7 @@ struct PlayableVideoRow: View {
             .accessibilityIdentifier("videoRow_\(video.shortCode)")
             .onTapGesture {
                 guard video.fetched else { return }
-                coordinator.play(allVideos.playableList(startingAt: video))
+                coordinator.play(allVideos.playableQueue(startingAt: video))
             }
     }
 }

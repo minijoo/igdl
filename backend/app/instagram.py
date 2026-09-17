@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import threading
 import time
@@ -26,10 +27,17 @@ _lock = threading.Lock()
 # ~100 downloads in an hour triggered this). A randomized pause between
 # resolves — not a fixed one, so the spacing itself doesn't become the next
 # tell — gives Instagram's traffic a breather between posts even when
-# requests are queued back-to-back. Tune these if it's still not enough, or
-# loosen them if batches end up taking too long in practice.
-_MIN_GAP_SECONDS = 2.0
-_MAX_GAP_SECONDS = 5.0
+# requests are queued back-to-back.
+#
+# Env-overridable (IGDL_RESOLVE_MIN_GAP_SECONDS / IGDL_RESOLVE_MAX_GAP_SECONDS
+# in .env, then `systemctl restart igdl-backend`) rather than hardcoded, so
+# this can be dialed way up for a one-time "clear the whole backlog
+# overnight, reliability over speed" run (where a human having to relogin
+# and reupload the session costs far more time than any amount of extra
+# waiting) without a code change/redeploy each time, then dialed back down
+# for normal fast day-to-day top-ups.
+_MIN_GAP_SECONDS = float(os.environ.get("IGDL_RESOLVE_MIN_GAP_SECONDS", "2.0"))
+_MAX_GAP_SECONDS = float(os.environ.get("IGDL_RESOLVE_MAX_GAP_SECONDS", "5.0"))
 _last_call_finished_at = 0.0
 
 

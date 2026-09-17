@@ -20,14 +20,6 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
-                if !pendingVideos.isEmpty {
-                    NavigationLink {
-                        DownloadView()
-                    } label: {
-                        Label("Download New Videos (\(pendingVideos.count))", systemImage: "arrow.down.circle")
-                    }
-                }
-
                 if !recentlyAdded.isEmpty {
                     Section("Recently Added") {
                         ForEach(recentlyAdded) { video in

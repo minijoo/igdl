@@ -13,6 +13,8 @@ struct RootTabView: View {
                 .tabItem { Label("Home", systemImage: "house") }
             LibraryView()
                 .tabItem { Label("Library", systemImage: "square.grid.2x2") }
+            DownloadView()
+                .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
             SearchView()
                 .tabItem { Label("Search", systemImage: "magnifyingglass") }
         }

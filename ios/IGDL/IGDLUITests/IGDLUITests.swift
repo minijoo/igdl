@@ -24,8 +24,14 @@ final class IGDLUITests: XCTestCase {
         app.buttons["Done"].tap()
 
         XCTAssertTrue(app.staticTexts["No videos yet"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download New Videos'")).firstMatch.exists)
         attachScreenshot(from: app, named: "home-nothing-downloaded-yet")
+
+        app.tabBars.buttons["Downloads"].tap()
+        XCTAssertTrue(
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'checkbox_'")).firstMatch.waitForExistence(timeout: 5),
+            "Downloads tab should list the imported-but-not-yet-downloaded videos"
+        )
+        attachScreenshot(from: app, named: "downloads-tab-pending")
 
         app.tabBars.buttons["Library"].tap()
         app.buttons["Videos"].tap()
@@ -52,7 +58,7 @@ final class IGDLUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Imported 2 items."].waitForExistence(timeout: 15))
         app.buttons["Done"].tap()
 
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download New Videos'")).firstMatch.tap()
+        app.tabBars.buttons["Downloads"].tap()
 
         let shortCodes = ["DbvVH3RTq9w", "DcZS95wRUJ9"]
         for code in shortCodes {
@@ -78,6 +84,52 @@ final class IGDLUITests: XCTestCase {
         attachScreenshot(from: app, named: "download-complete")
     }
 
+    /// Regression test: the Downloads screen used to be pushed via a
+    /// NavigationLink from Home, so navigating away and back popped it,
+    /// tearing down its @State (including the DownloadManager tracking
+    /// progress) even though the real download kept running in the
+    /// background — the in-progress UI would simply vanish. Now that
+    /// Downloads is its own tab, SwiftUI keeps the tab's view (and its
+    /// @State) alive across tab switches, so switching away mid-download and
+    /// back should still show the same in-flight "Downloading" section
+    /// instead of losing it.
+    func testDownloadProgressPersistsAcrossTabSwitch() throws {
+        let fixturePath = Bundle(for: Self.self).path(forResource: "small_headers_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = fixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 2 items."].waitForExistence(timeout: 15))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Downloads"].tap()
+
+        for code in ["DbvVH3RTq9w", "DcZS95wRUJ9"] {
+            app.buttons["checkbox_\(code)"].tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download Selected'")).firstMatch.tap()
+
+        XCTAssertTrue(app.staticTexts["Downloading"].waitForExistence(timeout: 5))
+
+        // Navigate away to another tab and back while the download is still
+        // in flight.
+        app.tabBars.buttons["Home"].tap()
+        app.tabBars.buttons["Downloads"].tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Downloading"].waitForExistence(timeout: 5),
+            "the in-progress download section should still be there after switching tabs, not reset"
+        )
+        attachScreenshot(from: app, named: "downloading-persists-after-tab-switch")
+
+        // Let the real download finish so the app isn't torn down mid-flight.
+        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 60))
+    }
+
     /// Downloads the same 2 known posts as testDownloadSelectedVideos, then
     /// drives real playback: opens a video, expands/collapses comments, and
     /// dismisses back to the list — confirming the custom AVPlayer-based
@@ -95,7 +147,7 @@ final class IGDLUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Imported 2 items."].waitForExistence(timeout: 15))
         app.buttons["Done"].tap()
 
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download New Videos'")).firstMatch.tap()
+        app.tabBars.buttons["Downloads"].tap()
         for code in ["DbvVH3RTq9w", "DcZS95wRUJ9"] {
             app.buttons["checkbox_\(code)"].tap()
         }
@@ -378,7 +430,7 @@ final class IGDLUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Imported 1 items."].waitForExistence(timeout: 15))
         app.buttons["Done"].tap()
 
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download New Videos'")).firstMatch.tap()
+        app.tabBars.buttons["Downloads"].tap()
 
         // 176.133s -> 2:56.
         XCTAssertTrue(app.staticTexts["2:56"].waitForExistence(timeout: 5), "duration should render as M:SS on the Download screen")
@@ -455,7 +507,7 @@ final class IGDLUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
         app.buttons["Done"].tap()
 
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download New Videos'")).firstMatch.tap()
+        app.tabBars.buttons["Downloads"].tap()
 
         XCTAssertTrue(app.staticTexts["0 selected"].waitForExistence(timeout: 5))
 
@@ -600,6 +652,39 @@ final class IGDLUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 5), "tray should close after adding a category")
         attachScreenshot(from: app, named: "categorized-from-home")
+    }
+
+    /// Diagnostic reproduction for a reported bug: tapping a creator in
+    /// Library → Creators is supposed to open CreatorDetailView (a list of
+    /// that creator's videos) but instead freezes the app. Never covered by
+    /// any automated test before now.
+    func testCreatorsListDiagnostic() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Seed local fixture videos (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Seeded 3 fixture video(s)."].waitForExistence(timeout: 10))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["Creators"].tap()
+        XCTAssertTrue(app.navigationBars["Creators"].waitForExistence(timeout: 5))
+        attachScreenshot(from: app, named: "creators-list")
+
+        let firstCreatorRow = app.cells.firstMatch
+        XCTAssertTrue(firstCreatorRow.waitForExistence(timeout: 5))
+        let creatorName = firstCreatorRow.staticTexts.firstMatch.label
+        firstCreatorRow.tap()
+
+        XCTAssertTrue(app.navigationBars[creatorName].waitForExistence(timeout: 10), "should navigate to that creator's detail view without freezing")
+        attachScreenshot(from: app, named: "creator-detail")
     }
 
     private func attachScreenshot(from app: XCUIApplication, named name: String) {

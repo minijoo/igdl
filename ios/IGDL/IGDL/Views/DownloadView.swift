@@ -3,6 +3,9 @@ import SwiftData
 
 struct DownloadView: View {
     @Environment(\.modelContext) private var modelContext
+    // Distinguishes "nothing imported yet" from "everything imported is
+    // already downloaded" — those need different empty-state messaging.
+    @Query private var allVideos: [Video]
     @Query(filter: #Predicate<Video> { !$0.fetched }, sort: \Video.takenAt, order: .reverse)
     private var pendingVideos: [Video]
 
@@ -23,79 +26,87 @@ struct DownloadView: View {
     }
 
     var body: some View {
-        List {
-            if pendingVideos.isEmpty {
-                ContentUnavailableView(
-                    "Nothing to download",
-                    systemImage: "checkmark.circle",
-                    description: Text("Every synced video has already been downloaded.")
-                )
-            } else {
-                // A plain row in the list's own content, not
-                // .safeAreaInset(edge: .top) — that overlapped the
-                // navigation title's large-title area instead of sitting
-                // below it.
-                HStack {
-                    Text("\(selected.count) selected")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("selectedCount")
-                    Spacer()
-                }
-                .listRowSeparator(.hidden)
+        NavigationStack {
+            List {
+                if allVideos.isEmpty {
+                    ContentUnavailableView(
+                        "No videos imported",
+                        systemImage: "tray",
+                        description: Text("Import a headers file from Settings to get started.")
+                    )
+                } else if pendingVideos.isEmpty {
+                    ContentUnavailableView(
+                        "Nothing to download",
+                        systemImage: "checkmark.circle",
+                        description: Text("Every synced video has already been downloaded.")
+                    )
+                } else {
+                    // A plain row in the list's own content, not
+                    // .safeAreaInset(edge: .top) — that overlapped the
+                    // navigation title's large-title area instead of sitting
+                    // below it.
+                    HStack {
+                        Text("\(selected.count) selected")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("selectedCount")
+                        Spacer()
+                    }
+                    .listRowSeparator(.hidden)
 
-                if !downloadingVideos.isEmpty {
-                    Section("Downloading") {
-                        ForEach(downloadingVideos) { video in
-                            downloadingRow(for: video)
+                    if !downloadingVideos.isEmpty {
+                        Section("Downloading") {
+                            ForEach(downloadingVideos) { video in
+                                downloadingRow(for: video)
+                            }
+                        }
+                    }
+                    if !selectableVideos.isEmpty {
+                        Section {
+                            ForEach(selectableVideos) { video in
+                                selectableRow(for: video)
+                            }
                         }
                     }
                 }
+            }
+            .navigationTitle("Download")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu("Select…") {
+                        // 20 videos is roughly 20-30 minutes of typical Reels
+                        // length — a reasonable single batch to queue up without
+                        // the user having to hand-pick from thousands of items.
+                        Button {
+                            selectFromTop(count: 20)
+                        } label: {
+                            Label("20 from top", systemImage: "list.bullet")
+                        }
+                        .accessibilityIdentifier("select20FromTop")
+
+                        Button {
+                            selectRandom(count: 20)
+                        } label: {
+                            Label("20 random", systemImage: "shuffle")
+                        }
+                        .accessibilityIdentifier("select20Random")
+                    }
+                    .accessibilityIdentifier("selectMenu")
+                    .disabled(selectableVideos.isEmpty)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
                 if !selectableVideos.isEmpty {
-                    Section {
-                        ForEach(selectableVideos) { video in
-                            selectableRow(for: video)
-                        }
-                    }
-                }
-            }
-        }
-        .navigationTitle("Download")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu("Select…") {
-                    // 20 videos is roughly 20-30 minutes of typical Reels
-                    // length — a reasonable single batch to queue up without
-                    // the user having to hand-pick from thousands of items.
                     Button {
-                        selectFromTop(count: 20)
+                        startDownload()
                     } label: {
-                        Label("20 from top", systemImage: "list.bullet")
+                        Text(isDownloading ? "Downloading…" : "Download Selected (\(selected.count))")
+                            .frame(maxWidth: .infinity)
                     }
-                    .accessibilityIdentifier("select20FromTop")
-
-                    Button {
-                        selectRandom(count: 20)
-                    } label: {
-                        Label("20 random", systemImage: "shuffle")
-                    }
-                    .accessibilityIdentifier("select20Random")
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selected.isEmpty || isDownloading)
+                    .padding()
                 }
-                .accessibilityIdentifier("selectMenu")
-                .disabled(selectableVideos.isEmpty)
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            if !selectableVideos.isEmpty {
-                Button {
-                    startDownload()
-                } label: {
-                    Text(isDownloading ? "Downloading…" : "Download Selected (\(selected.count))")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(selected.isEmpty || isDownloading)
-                .padding()
             }
         }
     }

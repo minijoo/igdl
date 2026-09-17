@@ -13,7 +13,7 @@ struct CreatorsListView: View {
     var body: some View {
         List(creators, id: \.username) { creator in
             NavigationLink {
-                CreatorDetailView(username: creator.username)
+                CreatorDetailView(username: creator.username, allVideos: allVideos)
             } label: {
                 HStack {
                     Text(creator.username)
@@ -29,7 +29,12 @@ struct CreatorsListView: View {
 
 struct CreatorDetailView: View {
     let username: String
-    @Query(filter: #Predicate<Video> { $0.fetched }) private var allVideos: [Video]
+    // Passed down from CreatorsListView rather than an independent @Query
+    // for the same #Predicate here — see docs/plan.md for the hang that
+    // caused (both this view and its parent live in the same
+    // NavigationStack; running the identical live query in both
+    // simultaneously froze the app on push).
+    let allVideos: [Video]
 
     private var videos: [Video] {
         allVideos

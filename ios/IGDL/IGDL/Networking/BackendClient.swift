@@ -58,16 +58,20 @@ final class BackendClient {
         components.queryItems = [URLQueryItem(name: "short_code", value: shortCode)]
         var request = URLRequest(url: components.url!)
         request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        // The backend serializes every resolve behind one global lock (only
-        // one Instagram-facing call in flight at a time, deliberately — see
-        // docs/plan.md) — DownloadManager sends up to 4 of these
-        // concurrently, so a request can legitimately spend a while just
-        // waiting its turn. The default 60s URLSession timeout was tight
-        // enough to occasionally cancel a request still queued behind the
-        // lock, which (since it never got a response) also never showed up
-        // in the backend's own logs, making it look like the request never
-        // arrived at all.
-        request.timeoutInterval = 120
+        // The backend serializes every resolve behind one global lock *and*
+        // adds a randomized breather between them (server-side,
+        // env-tunable — see docs/plan.md), deliberately: only one
+        // Instagram-facing call at a time, with real spacing between posts,
+        // not just concurrency. DownloadManager only ever sends one resolve
+        // at a time now for exactly this reason, but a single request can
+        // still legitimately take a while (the breather can be dialed up to
+        // tens of seconds for an intentionally slow, maximally-safe
+        // overnight batch) — this needs to stay comfortably above whatever
+        // that's set to server-side, since the client has no way to know
+        // the current value. 300s is a generous ceiling that costs nothing
+        // in the normal fast case and still eventually fails out a request
+        // that's genuinely stuck rather than just slow.
+        request.timeoutInterval = 300
         let (data, response) = try await session.data(for: request)
         try Self.checkStatus(response, data: data)
         return try JSONDecoder().decode(ResolvedPost.self, from: data)

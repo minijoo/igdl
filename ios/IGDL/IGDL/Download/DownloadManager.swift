@@ -47,7 +47,15 @@ final class DownloadManager {
 
     private let client: BackendClient
     private let coordinator: BackgroundDownloadCoordinator
-    private let maxConcurrent = 4
+    // The backend now fully serializes every resolve behind its own lock
+    // *and* spaces them with a randomized breather (see docs/plan.md) —
+    // sending more than one concurrently no longer buys any real
+    // throughput, it just means N requests sit holding an HTTP connection
+    // open while queued behind each other's gap, compounding how long the
+    // last one waits and risking it blowing past even a generous client
+    // timeout. 1 removes that multiplication entirely: each request only
+    // ever waits out its own gap, never everyone else's too.
+    private let maxConcurrent = 1
 
     init(client: BackendClient = .shared, coordinator: BackgroundDownloadCoordinator = .shared) {
         self.client = client

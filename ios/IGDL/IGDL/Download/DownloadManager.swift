@@ -28,12 +28,14 @@ private extension Array {
 
 /// Orchestrates downloading selected videos. The backend resolves a post to
 /// its CDN video/cover URLs, caption, and top comments in one call (see
-/// docs/plan.md) — this class then downloads the video/cover directly from
-/// Instagram's CDN itself and saves everything via MediaStore. Runs with
-/// bounded concurrency rather than fully sequential or fully parallel:
-/// resolving still goes through the backend's single-Instagram-call-at-a-
-/// time lock, but the CDN downloads themselves are fine in parallel since
-/// they don't touch Instagram's authenticated API at all.
+/// docs/plan.md); the actual video/cover transfers are then handed off to
+/// BackgroundDownloadCoordinator's background URLSession rather than done
+/// directly here, so a batch keeps going even if the app is backgrounded
+/// mid-download (see docs/plan.md for why a plain foreground download used
+/// to just fail in that case). Resolving still runs with bounded
+/// concurrency (a handful of small backend calls at a time); the CDN
+/// transfers themselves are governed by the background session's own
+/// scheduling, independent of this process.
 ///
 /// SwiftData model objects aren't passed across task boundaries (not
 /// Sendable) — only plain short_code strings are. All ModelContext access
@@ -44,10 +46,12 @@ final class DownloadManager {
     private(set) var states: [String: DownloadItemState] = [:]
 
     private let client: BackendClient
+    private let coordinator: BackgroundDownloadCoordinator
     private let maxConcurrent = 4
 
-    init(client: BackendClient = .shared) {
+    init(client: BackendClient = .shared, coordinator: BackgroundDownloadCoordinator = .shared) {
         self.client = client
+        self.coordinator = coordinator
     }
 
     func state(for shortCode: String) -> DownloadItemState {
@@ -61,6 +65,26 @@ final class DownloadManager {
         states.removeValue(forKey: shortCode)
     }
 
+    /// Picks back up any downloads still running in the background session
+    /// when this DownloadManager instance was (re)created — e.g. the app was
+    /// relaunched after being suspended mid-batch — so the "Downloading"
+    /// section reflects reality immediately instead of looking empty until
+    /// the batch happens to finish on its own.
+    func reconcile() async {
+        for (shortCode, progress) in await coordinator.activeDownloads() {
+            states[shortCode] = .downloadingVideo(progress: progress)
+            coordinator.registerHandlers(
+                shortCode: shortCode,
+                onProgress: { [weak self] progress in
+                    Task { @MainActor in self?.states[shortCode] = .downloadingVideo(progress: progress) }
+                },
+                onComplete: { [weak self] result in
+                    Task { @MainActor in self?.apply(result, to: shortCode) }
+                }
+            )
+        }
+    }
+
     func downloadSelected(shortCodes: [String], context: ModelContext) async {
         for shortCode in shortCodes {
             states[shortCode] = .resolving
@@ -70,46 +94,57 @@ final class DownloadManager {
             await withTaskGroup(of: Void.self) { group in
                 for shortCode in chunk {
                     group.addTask { [weak self] in
-                        await self?.downloadOne(shortCode: shortCode, context: context)
+                        await self?.startOne(shortCode: shortCode, context: context)
                     }
                 }
             }
         }
     }
 
-    private func downloadOne(shortCode: String, context: ModelContext) async {
+    private func startOne(shortCode: String, context: ModelContext) async {
         states[shortCode] = .resolving
         do {
             let resolved = try await client.resolve(shortCode: shortCode)
+            try saveMetadata(resolved: resolved, context: context)
 
             states[shortCode] = .downloadingVideo(progress: 0)
-            let videoData = try await client.download(url: resolved.videoURL) { [weak self] progress in
-                guard let self else { return }
-                Task { @MainActor in
-                    self.states[shortCode] = .downloadingVideo(progress: progress)
+            coordinator.enqueueDownload(
+                shortCode: shortCode,
+                videoURL: resolved.videoURL,
+                coverURL: resolved.coverURL,
+                onProgress: { [weak self] progress in
+                    Task { @MainActor in self?.states[shortCode] = .downloadingVideo(progress: progress) }
+                },
+                onComplete: { [weak self] result in
+                    Task { @MainActor in self?.apply(result, to: shortCode) }
                 }
-            }
-            let coverData = try await client.download(url: resolved.coverURL)
-
-            try save(resolved: resolved, videoData: videoData, coverData: coverData, context: context)
-
-            states[shortCode] = .done
+            )
         } catch {
             states[shortCode] = .failed(String(describing: error))
         }
     }
 
-    private func save(resolved: ResolvedPost, videoData: Data, coverData: Data, context: ModelContext) throws {
+    private func apply(_ result: Result<Void, Error>, to shortCode: String) {
+        switch result {
+        case .success:
+            states[shortCode] = .done
+        case .failure(let error):
+            states[shortCode] = .failed(String(describing: error))
+        }
+    }
+
+    /// Saves the caption/comments half of a resolved post right away, ahead
+    /// of the video/cover files actually landing — those are independent of
+    /// whether the background transfer succeeds, so there's no reason to
+    /// wait on it. BackgroundDownloadCoordinator flips `fetched`/
+    /// `downloadedAt` itself once both files are actually on disk.
+    private func saveMetadata(resolved: ResolvedPost, context: ModelContext) throws {
         let shortCode = resolved.shortCode
-        try MediaStore.save(videoData, to: MediaStore.videoURL(shortCode: shortCode))
-        try MediaStore.save(coverData, to: MediaStore.coverURL(shortCode: shortCode))
         let commentsData = try JSONEncoder().encode(resolved.comments)
         try MediaStore.save(commentsData, to: MediaStore.commentsURL(shortCode: shortCode))
 
         let descriptor = FetchDescriptor<Video>(predicate: #Predicate { $0.shortCode == shortCode })
         if let video = try? context.fetch(descriptor).first {
-            video.fetched = true
-            video.downloadedAt = .now
             // The backend's caption is freshly scraped, so it's the latest
             // version — worth refreshing over whatever the headers file
             // snapshot had, but only if we actually got one.

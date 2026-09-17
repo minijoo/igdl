@@ -130,6 +130,54 @@ final class IGDLUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 60))
     }
 
+    /// Regression test for the actual bug report: real transfers used to run
+    /// on a plain foreground URLSession inside a Swift Task tied to this
+    /// process, so backgrounding the app (not just switching tabs — actually
+    /// suspending the process) killed the in-flight download outright and it
+    /// came back showing failed. Downloads now go through
+    /// BackgroundDownloadCoordinator's background URLSession, which iOS
+    /// keeps running independently of whether this process is suspended.
+    /// Backgrounds the app mid-download via the home button (not just
+    /// switching SwiftUI tabs, which doesn't suspend the process at all),
+    /// waits well past how long a foreground task would have survived, then
+    /// reactivates and confirms the download actually completed rather than
+    /// failing.
+    func testDownloadCompletesAfterBackgrounding() throws {
+        let fixturePath = Bundle(for: Self.self).path(forResource: "small_headers_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = fixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 2 items."].waitForExistence(timeout: 15))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Downloads"].tap()
+
+        for code in ["DbvVH3RTq9w", "DcZS95wRUJ9"] {
+            app.buttons["checkbox_\(code)"].tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download Selected'")).firstMatch.tap()
+
+        XCTAssertTrue(app.staticTexts["Downloading"].waitForExistence(timeout: 5))
+
+        // Suspend the app for real (unlike a tab switch) by pressing home,
+        // then give it time well beyond how long a foreground-only transfer
+        // would have survived before this fix.
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 20)
+        app.activate()
+
+        XCTAssertTrue(
+            app.staticTexts["Nothing to download"].waitForExistence(timeout: 60),
+            "the download should have kept running (and finished) while the app was backgrounded, not failed"
+        )
+        attachScreenshot(from: app, named: "download-completed-after-backgrounding")
+    }
+
     /// Downloads the same 2 known posts as testDownloadSelectedVideos, then
     /// drives real playback: opens a video, expands/collapses comments, and
     /// dismisses back to the list — confirming the custom AVPlayer-based

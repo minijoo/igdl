@@ -36,4 +36,19 @@ enum MediaStore {
     static func hasVideo(shortCode: String) -> Bool {
         (try? videoURL(shortCode: shortCode)).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
+
+    static func hasCover(shortCode: String) -> Bool {
+        (try? coverURL(shortCode: shortCode)).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+    }
+
+    /// Moves a background URLSessionDownloadTask's temp file into permanent
+    /// storage — that temp file is deleted the instant the delegate callback
+    /// handing it to us returns, so this has to happen synchronously there,
+    /// not via a Data round-trip.
+    static func moveDownloadedFile(from tempURL: URL, to destinationURL: URL) throws {
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.moveItem(at: tempURL, to: destinationURL)
+    }
 }

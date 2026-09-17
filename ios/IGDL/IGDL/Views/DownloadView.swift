@@ -108,6 +108,13 @@ struct DownloadView: View {
                     .padding()
                 }
             }
+            .task {
+                // Picks back up any downloads still running in the
+                // background session — e.g. the app was relaunched after
+                // being suspended mid-batch — so this screen doesn't look
+                // empty until the batch happens to finish on its own.
+                await manager.reconcile()
+            }
         }
     }
 

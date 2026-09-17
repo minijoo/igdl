@@ -4,6 +4,9 @@ import AVFoundation
 
 @main
 struct IGDLApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    private let container: ModelContainer
+
     init() {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-UITestReset") {
@@ -17,13 +20,22 @@ struct IGDLApp: App {
         // Disturb/ringer-independent system volume. .playback is the
         // standard category for this.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
+
+        // Created explicitly (rather than via the `.modelContainer(for:)`
+        // scene modifier) so BackgroundDownloadCoordinator can also reach
+        // it — its delegate callbacks need to write to SwiftData even when
+        // no view hierarchy exists yet, e.g. the app was relaunched purely
+        // to receive a background download's completion.
+        let container = try! ModelContainer(for: Video.self, Category.self, Playlist.self)
+        self.container = container
+        BackgroundDownloadCoordinator.shared.modelContainer = container
     }
 
     var body: some Scene {
         WindowGroup {
             RootTabView()
         }
-        .modelContainer(for: [Video.self, Category.self, Playlist.self])
+        .modelContainer(container)
     }
 
     #if DEBUG

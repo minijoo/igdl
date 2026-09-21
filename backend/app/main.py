@@ -1,7 +1,7 @@
 import logging
 import os
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
 from . import instagram
 
@@ -26,8 +26,8 @@ def require_api_key(x_api_key: str = Header(default='')) -> None:
 
 
 @app.get('/downloads/resolve', dependencies=[Depends(require_api_key)])
-def resolve_download(short_code: str):
+async def resolve_download(request: Request, short_code: str):
     try:
-        return instagram.resolve_post(short_code)
+        return await instagram.resolve_post(request, short_code)
     except instagram.ResolveError as e:
         raise HTTPException(502, str(e))

@@ -5,6 +5,11 @@ import Observation
 enum DownloadItemState: Equatable {
     case notStarted
     case resolving // asking the backend for CDN URLs + comments
+    // Wi-Fi-only is on (see Settings) and only cellular is currently
+    // available — not a failure, the task is just parked until a suitable
+    // network shows up, and resumes on its own (moving back to .resolving
+    // or .downloadingVideo) once it does.
+    case waitingForWiFi
     case downloadingVideo(progress: Double) // 0...1
     case done
     case failed(String)
@@ -18,47 +23,25 @@ enum DownloadItemState: Equatable {
     }
 }
 
-private extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
-    }
-}
-
-/// Orchestrates downloading selected videos. The backend resolves a post to
-/// its CDN video/cover URLs, caption, and top comments in one call (see
-/// docs/plan.md); the actual video/cover transfers are then handed off to
-/// BackgroundDownloadCoordinator's background URLSession rather than done
-/// directly here, so a batch keeps going even if the app is backgrounded
-/// mid-download (see docs/plan.md for why a plain foreground download used
-/// to just fail in that case). Resolving still runs with bounded
-/// concurrency (a handful of small backend calls at a time); the CDN
-/// transfers themselves are governed by the background session's own
-/// scheduling, independent of this process.
-///
-/// SwiftData model objects aren't passed across task boundaries (not
-/// Sendable) — only plain short_code strings are. All ModelContext access
-/// happens back on the MainActor, where this whole class is isolated.
+/// Mirrors BackgroundDownloadCoordinator's progress/completion callbacks
+/// into UI state. That's *all* this does now — every part of actually
+/// resolving and downloading a video runs through the coordinator's
+/// background URLSession (see docs/plan.md), not any live loop here. That's
+/// deliberate: a loop driven by this (regular, suspendable) process would
+/// freeze the moment iOS suspends the app — which is exactly what used to
+/// stall an overnight batch the instant the phone went to sleep, even
+/// though the file transfers themselves kept going. There's nothing left
+/// for this class to throttle or sequence either — the backend fully
+/// serializes and paces every resolve itself, and the background session
+/// tolerates a task sitting queued for however long that takes.
 @Observable
 @MainActor
 final class DownloadManager {
     private(set) var states: [String: DownloadItemState] = [:]
 
-    private let client: BackendClient
     private let coordinator: BackgroundDownloadCoordinator
-    // The backend now fully serializes every resolve behind its own lock
-    // *and* spaces them with a randomized breather (see docs/plan.md) —
-    // sending more than one concurrently no longer buys any real
-    // throughput, it just means N requests sit holding an HTTP connection
-    // open while queued behind each other's gap, compounding how long the
-    // last one waits and risking it blowing past even a generous client
-    // timeout. 1 removes that multiplication entirely: each request only
-    // ever waits out its own gap, never everyone else's too.
-    private let maxConcurrent = 1
 
-    init(client: BackendClient = .shared, coordinator: BackgroundDownloadCoordinator = .shared) {
-        self.client = client
+    init(coordinator: BackgroundDownloadCoordinator = .shared) {
         self.coordinator = coordinator
     }
 
@@ -79,67 +62,57 @@ final class DownloadManager {
     /// section reflects reality immediately instead of looking empty until
     /// the batch happens to finish on its own.
     func reconcile() async {
-        for (shortCode, progress) in await coordinator.activeDownloads() {
-            states[shortCode] = .downloadingVideo(progress: progress)
+        for (shortCode, state) in await coordinator.activeDownloads() {
+            switch state {
+            case .resolving:
+                states[shortCode] = .resolving
+            case .downloading(let progress):
+                states[shortCode] = .downloadingVideo(progress: progress)
+            }
             coordinator.registerHandlers(
                 shortCode: shortCode,
                 onProgress: { [weak self] progress in
                     Task { @MainActor in self?.states[shortCode] = .downloadingVideo(progress: progress) }
                 },
-                onComplete: { [weak self] result in
-                    Task { @MainActor in self?.apply(result, to: shortCode) }
-                }
-            )
-        }
-    }
-
-    func downloadSelected(shortCodes: [String], context: ModelContext) async {
-        for shortCode in shortCodes {
-            states[shortCode] = .resolving
-        }
-
-        for chunk in shortCodes.chunked(into: maxConcurrent) {
-            await withTaskGroup(of: Void.self) { group in
-                for shortCode in chunk {
-                    group.addTask { [weak self] in
-                        await self?.startOne(shortCode: shortCode, context: context)
-                    }
-                }
-            }
-        }
-    }
-
-    private func startOne(shortCode: String, context: ModelContext) async {
-        states[shortCode] = .resolving
-        do {
-            let resolved = try await client.resolve(shortCode: shortCode)
-            try saveMetadata(resolved: resolved, context: context)
-
-            states[shortCode] = .downloadingVideo(progress: 0)
-            coordinator.enqueueDownload(
-                shortCode: shortCode,
-                videoURL: resolved.videoURL,
-                coverURL: resolved.coverURL,
-                onProgress: { [weak self] progress in
-                    Task { @MainActor in self?.states[shortCode] = .downloadingVideo(progress: progress) }
+                onWaitingForConnectivity: { [weak self] in
+                    Task { @MainActor in self?.states[shortCode] = .waitingForWiFi }
                 },
                 onComplete: { [weak self] result in
                     Task { @MainActor in self?.apply(result, to: shortCode) }
                 }
             )
-        } catch {
-            let message = Self.describe(error)
-            // Printed via NSLog (not print — see docs/plan.md, print() from
-            // the app under test doesn't reach xcodebuild's piped stdout,
-            // and this is the same "actually visible in the device console"
-            // concern for real on-device debugging) so a resolve failure has
-            // a client-side trace even when nothing reached the backend's
-            // own logs at all (e.g. a request cancelled while still queued
-            // behind the backend's resolve lock).
-            NSLog("[IGDL] resolve failed shortCode=%@ error=%@", shortCode, message)
-            markIncompatibleIfNeeded(shortCode: shortCode, message: message, context: context)
-            states[shortCode] = .failed(message)
         }
+    }
+
+    /// Enqueues every selected video's whole pipeline immediately — no
+    /// client-side batching or throttling. Returns as soon as each one is
+    /// registered with the background session, not when any of them finish.
+    func downloadSelected(shortCodes: [String]) {
+        for shortCode in shortCodes {
+            states[shortCode] = .resolving
+            coordinator.enqueueResolveAndDownload(
+                shortCode: shortCode,
+                onProgress: { [weak self] progress in
+                    Task { @MainActor in self?.states[shortCode] = .downloadingVideo(progress: progress) }
+                },
+                onWaitingForConnectivity: { [weak self] in
+                    Task { @MainActor in self?.states[shortCode] = .waitingForWiFi }
+                },
+                onComplete: { [weak self] result in
+                    Task { @MainActor in self?.apply(result, to: shortCode) }
+                }
+            )
+        }
+    }
+
+    /// Stops every in-flight resolve/video/cover task and clears them back
+    /// to the plain selectable list — an explicit user action, not a
+    /// failure, so states are wiped directly rather than routed through
+    /// apply(_:to:) (which would otherwise show them as "Failed —
+    /// Cancelled" and need an individual tap-to-retry each).
+    func cancelAll() async {
+        await coordinator.cancelAllTasks()
+        states.removeAll()
     }
 
     private func apply(_ result: Result<Void, Error>, to shortCode: String) {
@@ -147,9 +120,7 @@ final class DownloadManager {
         case .success:
             states[shortCode] = .done
         case .failure(let error):
-            let message = Self.describe(error)
-            NSLog("[IGDL] download failed shortCode=%@ error=%@", shortCode, message)
-            states[shortCode] = .failed(message)
+            states[shortCode] = .failed(Self.describe(error))
         }
     }
 
@@ -169,45 +140,5 @@ final class DownloadManager {
             return message ?? "Server returned \(code)"
         }
         return String(describing: error)
-    }
-
-    /// "post has no video" is the backend's exact wording (see
-    /// backend/app/instagram.py) for a slideshow/carousel post — a
-    /// permanent, not-network-related failure, not something a retry could
-    /// ever fix. Flagging it here means the Download screen can file it
-    /// under "Not Reels" from now on instead of leaving it to fail the same
-    /// way every time it's selected again.
-    private static let notReelsErrorMessage = "post has no video"
-
-    private func markIncompatibleIfNeeded(shortCode: String, message: String, context: ModelContext) {
-        guard message == Self.notReelsErrorMessage else { return }
-        let descriptor = FetchDescriptor<Video>(predicate: #Predicate { $0.shortCode == shortCode })
-        if let video = try? context.fetch(descriptor).first {
-            video.isVideo = false
-            try? context.save()
-        }
-    }
-
-    /// Saves the caption/comments half of a resolved post right away, ahead
-    /// of the video/cover files actually landing — those are independent of
-    /// whether the background transfer succeeds, so there's no reason to
-    /// wait on it. BackgroundDownloadCoordinator flips `fetched`/
-    /// `downloadedAt` itself once both files are actually on disk.
-    private func saveMetadata(resolved: ResolvedPost, context: ModelContext) throws {
-        let shortCode = resolved.shortCode
-        let commentsData = try JSONEncoder().encode(resolved.comments)
-        try MediaStore.save(commentsData, to: MediaStore.commentsURL(shortCode: shortCode))
-
-        let descriptor = FetchDescriptor<Video>(predicate: #Predicate { $0.shortCode == shortCode })
-        if let video = try? context.fetch(descriptor).first {
-            // The backend's caption is freshly scraped, so it's the latest
-            // version — worth refreshing over whatever the headers file
-            // snapshot had, but only if we actually got one.
-            let trimmedCaption = resolved.caption.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedCaption.isEmpty {
-                video.captionText = trimmedCaption
-            }
-            try? context.save()
-        }
     }
 }

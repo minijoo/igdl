@@ -10,9 +10,24 @@ struct SyncView: View {
     @State private var resultMessage: String?
     @State private var errorMessage: String?
 
+    // Backs BackgroundDownloadCoordinator.allowCellularDownloadsDefaultsKey
+    // directly — same UserDefaults key, read fresh there per-request, so
+    // flipping this takes effect for the next thing enqueued without any
+    // extra plumbing. Defaults to false (Wi-Fi only), matching
+    // UserDefaults.bool(forKey:)'s own default for an unset key.
+    @AppStorage(BackgroundDownloadCoordinator.allowCellularDownloadsDefaultsKey)
+    private var allowCellularDownloads = false
+
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Allow Cellular Data", isOn: $allowCellularDownloads)
+                        .accessibilityIdentifier("allowCellularDownloadsToggle")
+                } footer: {
+                    Text("Off by default: downloads (and the metadata lookups before them) only run on Wi-Fi and wait for it to come back if you're on cellular. Turn this on to allow them over cellular data too.")
+                }
+
                 Section {
                     Button("Import Headers File…") {
                         showingPicker = true

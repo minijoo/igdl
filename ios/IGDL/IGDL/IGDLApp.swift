@@ -51,6 +51,7 @@ struct IGDLApp: App {
             try? FileManager.default.removeItem(at: file)
         }
         UserDefaults.standard.removeObject(forKey: HeadersImporter.authenticatedUsernameDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: BackgroundDownloadCoordinator.allowCellularDownloadsDefaultsKey)
     }
     #endif
 }

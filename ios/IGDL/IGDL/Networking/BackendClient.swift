@@ -23,65 +23,26 @@ enum BackendClientError: Error {
 /// FastAPI's default HTTPException body shape (`{"detail": "..."}`) — used
 /// to recover the actual reason (e.g. "post has no video") instead of just
 /// the bare status code.
-private struct BackendErrorBody: Decodable {
+struct BackendErrorBody: Decodable {
     let detail: String
 }
 
-/// Talks to the IGDL backend (see backend/app/main.py). One synchronous
-/// call resolves a post to its CDN video/cover URLs, caption, and top
-/// comments (via Instagram's own "top comments" GraphQL query — see
-/// docs/plan.md) — the backend never downloads or stores the video itself,
-/// it only needs an authenticated session to resolve URLs and comments.
-/// The app downloads the actual video/cover directly from those CDN URLs
-/// itself, via BackgroundDownloadCoordinator rather than this client.
-final class BackendClient {
+/// Backend connection details (see backend/app/main.py). Just constants now
+/// — the actual `/downloads/resolve` call used to live here as an async
+/// method, but moved entirely into BackgroundDownloadCoordinator's
+/// background URLSession (see docs/plan.md): a plain foreground request
+/// only survives seconds of backgrounding, but the backend's own resolve
+/// lock + breather can legitimately take much longer than that per call
+/// (tens of seconds, deliberately, to avoid tripping Instagram's abuse
+/// detection), and the whole point of an overnight batch is surviving the
+/// phone actually sleeping for hours.
+enum BackendClient {
+    static let baseURL = URL(string: "https://igdl.jordys.site")!
+
     // Backend is a personal single-user deployment (see docs/plan.md,
     // "Backend Deployment") — a static shared-secret header is enough auth
-    // for that, no need for real user accounts/OAuth. The key is only ever
-    // sent to our own backend host (resolve(shortCode:)), never to
-    // Instagram's CDN, since it has no business being sent to a third
-    // party. Lives in Secrets.swift, not here — this repo is public.
-    private static let apiKey = Secrets.backendAPIKey
-
-    static let shared = BackendClient(baseURL: URL(string: "https://igdl.jordys.site")!)
-
-    let baseURL: URL
-    private let session: URLSession
-
-    init(baseURL: URL, session: URLSession = .shared) {
-        self.baseURL = baseURL
-        self.session = session
-    }
-
-    func resolve(shortCode: String) async throws -> ResolvedPost {
-        var components = URLComponents(url: baseURL.appendingPathComponent("downloads/resolve"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "short_code", value: shortCode)]
-        var request = URLRequest(url: components.url!)
-        request.setValue(Self.apiKey, forHTTPHeaderField: "X-API-Key")
-        // The backend serializes every resolve behind one global lock *and*
-        // adds a randomized breather between them (server-side,
-        // env-tunable — see docs/plan.md), deliberately: only one
-        // Instagram-facing call at a time, with real spacing between posts,
-        // not just concurrency. DownloadManager only ever sends one resolve
-        // at a time now for exactly this reason, but a single request can
-        // still legitimately take a while (the breather can be dialed up to
-        // tens of seconds for an intentionally slow, maximally-safe
-        // overnight batch) — this needs to stay comfortably above whatever
-        // that's set to server-side, since the client has no way to know
-        // the current value. 300s is a generous ceiling that costs nothing
-        // in the normal fast case and still eventually fails out a request
-        // that's genuinely stuck rather than just slow.
-        request.timeoutInterval = 300
-        let (data, response) = try await session.data(for: request)
-        try Self.checkStatus(response, data: data)
-        return try JSONDecoder().decode(ResolvedPost.self, from: data)
-    }
-
-    private static func checkStatus(_ response: URLResponse, data: Data) throws {
-        guard let http = response as? HTTPURLResponse else { return }
-        guard (200..<300).contains(http.statusCode) else {
-            let message = try? JSONDecoder().decode(BackendErrorBody.self, from: data).detail
-            throw BackendClientError.badStatusCode(http.statusCode, message: message)
-        }
-    }
+    // for that, no need for real user accounts/OAuth. Sent only to this
+    // backend host, never to Instagram's CDN. Lives in Secrets.swift, not
+    // here — this repo is public.
+    static let apiKey = Secrets.backendAPIKey
 }

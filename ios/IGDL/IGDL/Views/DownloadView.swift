@@ -2,7 +2,6 @@ import SwiftUI
 import SwiftData
 
 struct DownloadView: View {
-    @Environment(\.modelContext) private var modelContext
     // Distinguishes "nothing imported yet" from "everything imported is
     // already downloaded" — those need different empty-state messaging.
     @Query private var allVideos: [Video]
@@ -11,7 +10,6 @@ struct DownloadView: View {
 
     @State private var selected: Set<String> = [] // shortCode
     @State private var manager = DownloadManager()
-    @State private var isDownloading = false
 
     // Videos discovered (via a prior failed resolve — see DownloadManager)
     // to be a slideshow/carousel post rather than an actual Reel. Excluded
@@ -72,6 +70,13 @@ struct DownloadView: View {
                             ForEach(downloadingVideos) { video in
                                 downloadingRow(for: video)
                             }
+                            Button(role: .destructive) {
+                                cancelAllDownloads()
+                            } label: {
+                                Text("Cancel All Downloads")
+                                    .foregroundStyle(.red)
+                            }
+                            .accessibilityIdentifier("cancelAllDownloads")
                         }
                     }
                     if !selectableVideos.isEmpty {
@@ -128,11 +133,11 @@ struct DownloadView: View {
                     Button {
                         startDownload()
                     } label: {
-                        Text(isDownloading ? "Downloading…" : "Download Selected (\(selected.count))")
+                        Text("Download Selected (\(selected.count))")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(selected.isEmpty || isDownloading)
+                    .disabled(selected.isEmpty)
                     .padding()
                 }
             }
@@ -155,7 +160,6 @@ struct DownloadView: View {
                 Image(systemName: selected.contains(video.shortCode) ? "checkmark.square.fill" : "square")
             }
             .buttonStyle(.plain)
-            .disabled(isDownloading)
             .accessibilityIdentifier("checkbox_\(video.shortCode)")
 
             VideoRow(video: video)
@@ -198,6 +202,11 @@ struct DownloadView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+
+            case .waitingForWiFi:
+                Label("Waiting for Wi-Fi…", systemImage: "wifi.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
 
             case .downloadingVideo(let progress):
                 ProgressView(value: progress)
@@ -275,12 +284,21 @@ struct DownloadView: View {
     }
 
     private func startDownload() {
-        let shortCodes = Array(selected)
-        isDownloading = true
+        // Enqueueing is instant — every video's resolve+download pipeline
+        // now runs entirely through the background session (see
+        // DownloadManager), so there's no in-flight window to track here
+        // beyond handing the short codes off.
+        manager.downloadSelected(shortCodes: Array(selected))
+        selected.removeAll()
+    }
+
+    /// Stops the whole in-progress batch — e.g. one started by mistake, or
+    /// one the user no longer wants to wait out. Cancelled videos return to
+    /// "Ready for Download" rather than sitting in "Downloading" showing a
+    /// failure that needs an individual retry.
+    private func cancelAllDownloads() {
         Task {
-            await manager.downloadSelected(shortCodes: shortCodes, context: modelContext)
-            isDownloading = false
-            selected.removeAll()
+            await manager.cancelAll()
         }
     }
 }

@@ -18,6 +18,12 @@ struct PlaybackPageView: View {
 
     @State private var isPaused = false
     @State private var isMuted = false
+    // A tap-to-toggle button, not a hold gesture — every continuously-
+    // tracking gesture tried on the video area broke PlaybackView's
+    // swipe-to-advance pager (see docs/plan.md), and a plain Button's
+    // discrete tap doesn't have that problem since it never competes with
+    // the pager's own pan recognizer for the same touch.
+    @State private var is2xSpeed = false
     // Set the instant a touch begins on the caption or scrubber, cleared
     // when it ends — always set well before the video area's own gesture
     // sees release for that same touch (touch-down on a child necessarily
@@ -70,6 +76,7 @@ struct PlaybackPageView: View {
             // a video restarts it rather than remembering it was paused.
             if active {
                 isPaused = false
+                is2xSpeed = false
                 showingComments = false
                 isCaptionExpanded = false
             }
@@ -148,31 +155,60 @@ struct PlaybackPageView: View {
     private var bottomInfoBar: some View {
         VStack(alignment: .trailing, spacing: 12) {
             if !showingComments {
-                // Icon-only, no label — sits directly above the comments
-                // button in this same trailing icon stack.
-                Button {
-                    onCategorize()
-                } label: {
-                    Image(systemName: "tag")
-                        .foregroundStyle(.white)
-                }
-                // Same isActive-scoping reasoning as captionText/scrubber
-                // elsewhere in this file — the pre-rendered swipe-neighbor
-                // page has one of these alive at the same time.
-                .accessibilityIdentifier(isActive ? "categorizeButton" : "inactive-categorizeButton")
-
-                Button {
-                    showingComments = true
-                    loadCommentsIfNeeded()
-                } label: {
-                    VStack {
-                        Image(systemName: "bubble.right.fill")
-                        Text("\(video.commentCount)")
-                            .font(.caption2)
+                // A dedicated inner stack (rather than folding these into
+                // the outer VStack's own spacing) so the icons can be
+                // bigger and more spaced out from each other without
+                // changing the gap down to the caption block below.
+                VStack(spacing: 24) {
+                    // Tap-to-toggle, not hold-to-activate — see is2xSpeed.
+                    // Also unpauses: tapping this should start playback at
+                    // 2x even if the video was currently paused, not just
+                    // change the rate of something that isn't playing.
+                    Button {
+                        is2xSpeed.toggle()
+                        isPaused = false
+                        player?.rate = is2xSpeed ? 2.0 : 1.0
+                    } label: {
+                        Text("2x")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(is2xSpeed ? .yellow : .white)
                     }
-                    .foregroundStyle(.white)
+                    .accessibilityIdentifier(isActive ? "speed2xButton" : "inactive-speed2xButton")
+                    // Lets a UI test confirm the toggle actually flipped
+                    // (and, combined with the scrubber's own currentTime
+                    // value sampled twice, that playback is genuinely
+                    // advancing faster) without any way to read AVPlayer's
+                    // rate directly from outside the view.
+                    .accessibilityValue(is2xSpeed ? "2x" : "1x")
+
+                    // Icon-only, no label — sits directly above the comments
+                    // button in this same trailing icon stack.
+                    Button {
+                        onCategorize()
+                    } label: {
+                        Image(systemName: "tag")
+                            .font(.system(size: 26))
+                            .foregroundStyle(.white)
+                    }
+                    // Same isActive-scoping reasoning as captionText/scrubber
+                    // elsewhere in this file — the pre-rendered swipe-neighbor
+                    // page has one of these alive at the same time.
+                    .accessibilityIdentifier(isActive ? "categorizeButton" : "inactive-categorizeButton")
+
+                    Button {
+                        showingComments = true
+                        loadCommentsIfNeeded()
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: "bubble.right.fill")
+                                .font(.system(size: 26))
+                            Text("\(video.commentCount)")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.white)
+                    }
+                    .accessibilityIdentifier("showComments")
                 }
-                .accessibilityIdentifier("showComments")
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -356,7 +392,10 @@ struct PlaybackPageView: View {
         if isPaused {
             player?.pause()
         } else {
-            player?.play()
+            // Not player?.play() — that always resumes at rate 1.0, which
+            // would silently drop back out of 2x every time the video area
+            // is tapped to resume from a pause.
+            player?.rate = is2xSpeed ? 2.0 : 1.0
         }
     }
 

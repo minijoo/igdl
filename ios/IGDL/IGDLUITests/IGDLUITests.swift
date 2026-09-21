@@ -40,6 +40,34 @@ final class IGDLUITests: XCTestCase {
         attachScreenshot(from: app, named: "library-videos-empty")
     }
 
+    /// Verifies the "Allow Cellular Data" setting (see
+    /// BackgroundDownloadCoordinator.allowsCellularAccess) defaults to off
+    /// (Wi-Fi only) and actually persists across a toggle.
+    func testAllowCellularDownloadsDefaultsOffAndPersists() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        let toggle = app.switches["allowCellularDownloadsToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.value as? String, "0", "should default to Wi-Fi only")
+
+        // A Form's Toggle exposes two nested Switch elements: an outer
+        // row-spanning one (what our identifier resolves to, for VoiceOver)
+        // wrapping the actual small interactive control at the row's right
+        // edge — tapping the outer element's center misses it, so this taps
+        // near the right edge instead, where the real switch sits.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+
+        // Persists across leaving and reopening Settings, not just in-memory
+        // @State for this one sheet presentation.
+        app.buttons["Done"].tap()
+        app.buttons["Settings"].tap()
+        XCTAssertEqual(app.switches["allowCellularDownloadsToggle"].value as? String, "1")
+    }
+
     /// Drives the real Download screen against two known-good posts,
     /// downloading them for real over the network (backend resolves CDN
     /// URLs + comments, the app downloads video/cover directly from
@@ -80,7 +108,15 @@ final class IGDLUITests: XCTestCase {
         // pending-only @Query in DownloadView immediately filters out. Since
         // the fixture is just these 2 items, once both finish the list goes
         // fully empty — a single clean signal instead of per-row polling.
-        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 60))
+        //
+        // 480s, not something tighter: the backend's resolve lock + breather
+        // (env-tunable, see docs/plan.md) can legitimately need up to
+        // IGDL_RESOLVE_MAX_GAP_SECONDS per post on top of real work, and
+        // instaloader has its own internal retry/backoff against Instagram
+        // that can add tens of seconds on top of that when the account is
+        // under rate-limit pressure — observed directly against production
+        // while verifying this test.
+        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 480))
         attachScreenshot(from: app, named: "download-complete")
     }
 
@@ -127,7 +163,48 @@ final class IGDLUITests: XCTestCase {
         attachScreenshot(from: app, named: "downloading-persists-after-tab-switch")
 
         // Let the real download finish so the app isn't torn down mid-flight.
-        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 480))
+    }
+
+    /// "Cancel All Downloads" (see DownloadManager.cancelAll) should stop an
+    /// in-progress batch and return everything to "Ready for Download"
+    /// rather than leaving it sitting in "Downloading" as a failure that
+    /// needs an individual tap-to-retry each.
+    func testCancelAllDownloadsReturnsVideosToReadyForDownload() throws {
+        let fixturePath = Bundle(for: Self.self).path(forResource: "small_headers_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = fixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 2 items."].waitForExistence(timeout: 15))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Downloads"].tap()
+
+        for code in ["DbvVH3RTq9w", "DcZS95wRUJ9"] {
+            app.buttons["checkbox_\(code)"].tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download Selected'")).firstMatch.tap()
+
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Downloading ('")).firstMatch.waitForExistence(timeout: 5))
+
+        app.buttons["cancelAllDownloads"].tap()
+
+        XCTAssertFalse(
+            app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Downloading ('")).firstMatch.waitForExistence(timeout: 5),
+            "the Downloading section should be gone once everything's cancelled"
+        )
+        XCTAssertTrue(
+            app.staticTexts["Ready for Download (2)"].waitForExistence(timeout: 5),
+            "cancelled videos should return to the selectable list, not sit around as failures"
+        )
+        XCTAssertTrue(app.buttons["checkbox_DbvVH3RTq9w"].exists)
+        XCTAssertTrue(app.buttons["checkbox_DcZS95wRUJ9"].exists)
+        attachScreenshot(from: app, named: "cancel-all-downloads")
     }
 
     /// Regression test for the actual bug report: real transfers used to run
@@ -172,7 +249,7 @@ final class IGDLUITests: XCTestCase {
         app.activate()
 
         XCTAssertTrue(
-            app.staticTexts["Nothing to download"].waitForExistence(timeout: 60),
+            app.staticTexts["Nothing to download"].waitForExistence(timeout: 480),
             "the download should have kept running (and finished) while the app was backgrounded, not failed"
         )
         attachScreenshot(from: app, named: "download-completed-after-backgrounding")
@@ -200,7 +277,7 @@ final class IGDLUITests: XCTestCase {
             app.buttons["checkbox_\(code)"].tap()
         }
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Download Selected'")).firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.staticTexts["Nothing to download"].waitForExistence(timeout: 480))
 
         app.tabBars.buttons["Library"].tap()
         app.buttons["Videos"].tap()
@@ -358,6 +435,71 @@ final class IGDLUITests: XCTestCase {
         start.press(forDuration: 0.1, thenDragTo: end)
 
         attachScreenshot(from: app, named: "scrubber-after-drag")
+    }
+
+    /// Verifies the 2x speed button (see PlaybackPageView.is2xSpeed) — a
+    /// tap-to-toggle button rather than a hold gesture, since every
+    /// continuously-tracking gesture tried on the video area broke
+    /// swipe-to-advance (see docs/plan.md's long-press-to-2x writeup).
+    /// Confirms actual playback speed changed, via the scrubber's real
+    /// elapsed-time value sampled before/after, not just that the button's
+    /// own toggle state flipped.
+    func testSpeed2xButtonActuallyChangesPlaybackRate() throws {
+        let headersFixturePath = Bundle(for: Self.self).path(forResource: "aspect_ratio_fixture", ofType: "json")!
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestReset"]
+        app.launchEnvironment["IGDL_TEST_HEADERS_PATH"] = headersFixturePath
+        app.launch()
+
+        app.buttons["Settings"].tap()
+        app.buttons["Load repo headers.json (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Imported 3 items."].waitForExistence(timeout: 15))
+        app.buttons["Seed local fixture videos (DEBUG)"].tap()
+        XCTAssertTrue(app.staticTexts["Seeded 3 fixture video(s)."].waitForExistence(timeout: 10))
+        app.buttons["Done"].tap()
+
+        app.tabBars.buttons["Library"].tap()
+        app.buttons["Videos"].tap()
+
+        let row = app.descendants(matching: .any).matching(identifier: "videoRow_DbvVH3RTq9w").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        XCTAssertTrue(app.buttons["playbackDismiss"].waitForExistence(timeout: 10))
+
+        let speedButton = app.buttons["speed2xButton"]
+        XCTAssertTrue(speedButton.waitForExistence(timeout: 5))
+        XCTAssertEqual(speedButton.value as? String, "1x")
+
+        let scrubber = app.otherElements["scrubber"]
+        XCTAssertTrue(scrubber.waitForExistence(timeout: 5))
+
+        func currentTime() -> Double {
+            Double(scrubber.value as? String ?? "") ?? 0
+        }
+
+        // Let it play briefly at 1x, measuring how far real video time moves
+        // in a fixed real-time window.
+        let before1x = currentTime()
+        Thread.sleep(forTimeInterval: 1.5)
+        let elapsed1x = currentTime() - before1x
+
+        speedButton.tap()
+        XCTAssertEqual(speedButton.value as? String, "2x", "tapping should flip to the active state")
+
+        let before2x = currentTime()
+        Thread.sleep(forTimeInterval: 1.5)
+        let elapsed2x = currentTime() - before2x
+
+        XCTAssertGreaterThan(
+            elapsed2x, elapsed1x * 1.4,
+            "playback should advance noticeably faster at 2x (1x moved \(elapsed1x)s, 2x moved \(elapsed2x)s in the same real-time window)"
+        )
+
+        // Toggling off should return to normal speed, not leave it stuck.
+        speedButton.tap()
+        XCTAssertEqual(speedButton.value as? String, "1x")
+        attachScreenshot(from: app, named: "speed-2x-toggle")
     }
 
     /// Regression test for a bug where swiping to advance to the next video

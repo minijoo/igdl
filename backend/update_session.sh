@@ -11,11 +11,11 @@
 # Usage:
 #   ./update_session.sh [short_code_to_verify_with]
 #
-# Requires Chrome to be logged into the imjustaswe Instagram account
+# Requires Chrome to be logged into the ssseee9999999 Instagram account
 # locally — instaloader -b chrome imports its session cookies from there.
 set -euo pipefail
 
-SESSION_USERNAME="imjustaswe"
+SESSION_USERNAME="ssseee9999999"
 LOCAL_SESSION_FILE="$HOME/.config/instaloader/session-${SESSION_USERNAME}"
 SERVER_HOST="root@159.223.135.92"
 REMOTE_SESSION_DIR="/home/igdl/.config/instaloader"

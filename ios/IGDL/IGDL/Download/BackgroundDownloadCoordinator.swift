@@ -72,6 +72,25 @@ final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate,
     private var waitingForConnectivityHandlers: [String: () -> Void] = [:]
     private let handlersLock = NSLock()
 
+    /// Resolves waiting for their turn, oldest first. The app only ever has
+    /// `maxConcurrentResolves` resolve requests open at once (see
+    /// pumpResolveQueue) instead of handing the whole batch to the OS up
+    /// front: with N connections all held open with zero response bytes, one
+    /// of them completing made nsurlsessiond drop and reissue *all* the
+    /// others at once, a burst of N fresh requests every time — each of
+    /// which the backend had to detect as disconnected/duplicated and re-queue.
+    /// Persisted (not just in memory) so a batch survives the process being
+    /// killed and relaunched in the background.
+    private static let pendingResolvesDefaultsKey = "pendingResolveShortCodes"
+    private static let maxConcurrentResolves = 1
+    private var pumping = false
+    private var pumpAgain = false
+
+    private var pendingResolves: [String] {
+        get { UserDefaults.standard.stringArray(forKey: Self.pendingResolvesDefaultsKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.pendingResolvesDefaultsKey) }
+    }
+
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
         config.isDiscretionary = false
@@ -100,7 +119,49 @@ final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate,
         onComplete: @escaping (Result<Void, Error>) -> Void
     ) {
         registerHandlers(shortCode: shortCode, onProgress: onProgress, onWaitingForConnectivity: onWaitingForConnectivity, onComplete: onComplete)
-        startResolve(shortCode: shortCode)
+        handlersLock.lock()
+        if !pendingResolves.contains(shortCode) { pendingResolves.append(shortCode) }
+        handlersLock.unlock()
+        pumpResolveQueue()
+    }
+
+    /// Starts queued resolves until `maxConcurrentResolves` are in flight.
+    /// Called on enqueue and whenever a resolve task finishes; re-entrant
+    /// calls just flag another pass, so two callers can never both see "0
+    /// in flight" and each start one.
+    private func pumpResolveQueue() {
+        handlersLock.lock()
+        if pumping {
+            pumpAgain = true
+            handlersLock.unlock()
+            return
+        }
+        pumping = true
+        handlersLock.unlock()
+
+        Task {
+            while true {
+                handlersLock.withLock { pumpAgain = false }
+
+                let inFlight = await session.allTasks.filter { task in
+                    guard let (_, kind) = Self.parse(taskDescription: task.taskDescription) else { return false }
+                    return kind == .resolve && (task.state == .running || task.state == .suspended)
+                }.count
+
+                let (next, again): (String?, Bool) = handlersLock.withLock {
+                    var next: String?
+                    if inFlight < Self.maxConcurrentResolves, !pendingResolves.isEmpty {
+                        next = pendingResolves.removeFirst()
+                        pumpAgain = true
+                    }
+                    if !pumpAgain { pumping = false }
+                    return (next, pumpAgain)
+                }
+
+                if let next { startResolve(shortCode: next) }
+                if !again { return }
+            }
+        }
     }
 
     func registerHandlers(
@@ -122,6 +183,8 @@ final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate,
     /// process, instead of it looking empty until something finishes.
     func activeDownloads() async -> [String: RecoveredState] {
         var result: [String: RecoveredState] = [:]
+        let pending = handlersLock.withLock { pendingResolves }
+        for shortCode in pending { result[shortCode] = .resolving }
         for task in await session.allTasks {
             guard let (shortCode, kind) = Self.parse(taskDescription: task.taskDescription) else { continue }
             switch kind {
@@ -150,6 +213,7 @@ final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate,
         progressHandlers.removeAll()
         waitingForConnectivityHandlers.removeAll()
         completionHandlers.removeAll()
+        pendingResolves = []
         handlersLock.unlock()
         for task in await session.allTasks {
             task.cancel()
@@ -270,6 +334,8 @@ final class BackgroundDownloadCoordinator: NSObject, URLSessionDownloadDelegate,
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let (shortCode, kind) = Self.parse(taskDescription: task.taskDescription) else { return }
+        // Success or failure, this resolve's turn is over — start the next one.
+        defer { if kind == .resolve { pumpResolveQueue() } }
         if let error {
             failed(shortCode: shortCode, error: error)
             return

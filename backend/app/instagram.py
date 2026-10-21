@@ -15,7 +15,14 @@ logger = logging.getLogger("igdl.resolve")
 # One shared, already-authenticated Instaloader instance for the process's
 # lifetime rather than re-loading the session file per request — cheap to
 # share since every Instagram-facing call goes through _lock below anyway.
-_loader = instaloader.Instaloader()
+#
+# iphone_support=False: otherwise reading post.video_url makes an extra
+# request to Instagram's iPhone API (i.instagram.com/api/v1/media/{id}/info/)
+# plus a HEAD per video version to pick the largest — a third and fourth
+# Instagram-facing call per post on top of from_shortcode and comments, and
+# the iPhone API call was the first one challenged when the session was
+# used from the droplet. The URL from the GraphQL lookup is used instead.
+_loader = instaloader.Instaloader(iphone_support=False)
 _loader.load_session_from_file(SESSION_USERNAME)
 _lock = asyncio.Lock()
 
@@ -71,6 +78,24 @@ async def _wait_for_breather() -> None:
         pause = gap - elapsed
         logger.info("resolve pausing before Instagram call pause=%.1fs", pause)
         await asyncio.sleep(pause)
+
+
+def _fetch_post(short_code: str) -> tuple[instaloader.Post, dict | None]:
+    """Looks up the post and reads every field the response needs, all in
+    one place. Post's properties are lazy — reading one can make its own
+    Instagram request — so they're read here, inside resolve_post's
+    error handling and off the event loop, not while building the response
+    (a challenge raised from post.video_url there once surfaced as an
+    unhandled 500). Fields are None for a post with no video.
+    """
+    post = instaloader.Post.from_shortcode(_loader.context, short_code)
+    if not post.is_video or not post.video_url:
+        return post, None
+    return post, {
+        "video_url": post.video_url,
+        "cover_url": post.url,
+        "caption": post.caption or "",
+    }
 
 
 async def resolve_post(request: Request, short_code: str) -> dict:
@@ -135,8 +160,8 @@ async def resolve_post(request: Request, short_code: str) -> dict:
                 raise ResolveError("client disconnected")
 
             try:
-                post = await asyncio.wait_for(
-                    asyncio.to_thread(instaloader.Post.from_shortcode, _loader.context, short_code),
+                post, fields = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_post, short_code),
                     timeout=_WORK_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError as e:
@@ -146,7 +171,7 @@ async def resolve_post(request: Request, short_code: str) -> dict:
                 logger.warning("resolve failed short_code=%s error=%s", short_code, e)
                 raise ResolveError(f"failed to resolve post: {e}") from e
 
-            if not post.is_video:
+            if fields is None:
                 logger.warning("resolve failed short_code=%s error=post has no video", short_code)
                 raise ResolveError("post has no video")
 
@@ -177,13 +202,7 @@ async def resolve_post(request: Request, short_code: str) -> dict:
                 comments = []
 
             logger.info("resolve finished short_code=%s", short_code)
-            return {
-                "short_code": short_code,
-                "video_url": post.video_url,
-                "cover_url": post.url,
-                "caption": post.caption or "",
-                "comments": comments,
-            }
+            return {"short_code": short_code, **fields, "comments": comments}
         finally:
             # Recorded even on failure — a failed attempt still made at
             # least one real Instagram-facing request (from_shortcode), so

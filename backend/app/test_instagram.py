@@ -120,6 +120,22 @@ class ResolvePostTests(unittest.IsolatedAsyncioTestCase):
                 await instagram.resolve_post(FakeRequest(), "abc123")
         self.assertEqual(str(ctx.exception), "post has no video")
 
+    async def test_error_reading_lazy_post_field_is_a_resolve_error(self):
+        # Post.video_url can make its own Instagram request; a challenge
+        # raised from it once escaped resolve_post's error handling as an
+        # unhandled exception (a 500) instead of a ResolveError (a 502).
+        import instaloader
+
+        post = make_fake_post()
+        type(post).video_url = property(lambda self: (_ for _ in ()).throw(
+            instaloader.exceptions.AbortDownloadException("challenge_required")))
+        with patch("instaloader.Post.from_shortcode", return_value=post), \
+                patch("app.comments_graphql.fetch_top_comments") as fetch_comments:
+            with self.assertRaises(instagram.ResolveError) as ctx:
+                await instagram.resolve_post(FakeRequest(), "abc123")
+            fetch_comments.assert_not_called()
+        self.assertIn("challenge_required", str(ctx.exception))
+
     async def test_comments_fetch_error_degrades_to_empty_list_not_failure(self):
         from app.comments_graphql import CommentsFetchError
 

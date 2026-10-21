@@ -37,7 +37,20 @@ struct BackendErrorBody: Decodable {
 /// detection), and the whole point of an overnight batch is surviving the
 /// phone actually sleeping for hours.
 enum BackendClient {
-    static let baseURL = URL(string: "https://igdl.jordys.site")!
+    // The IGDL_BACKEND_URL default points a debug build at a backend running
+    // locally instead of the deployed one. A persisted default rather than a
+    // launch environment variable so it survives the app being relaunched
+    // from the home screen (or by iOS for background session events):
+    //   xcrun simctl spawn booted defaults write com.jordy.igdl IGDL_BACKEND_URL http://127.0.0.1:8000
+    //   xcrun simctl spawn booted defaults delete com.jordy.igdl IGDL_BACKEND_URL
+    static let baseURL: URL = {
+        #if DEBUG
+        if let override = UserDefaults.standard.string(forKey: "IGDL_BACKEND_URL"), let url = URL(string: override) {
+            return url
+        }
+        #endif
+        return URL(string: "https://igdl.jordys.site")!
+    }()
 
     // Backend is a personal single-user deployment (see docs/plan.md,
     // "Backend Deployment") — a static shared-secret header is enough auth
